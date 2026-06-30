@@ -67,11 +67,11 @@ export class GameServer {
   }
 
   /**
-   * For /resume: rebase time-relative state across the suspend wall-clock jump,
-   * and draw a fresh CSPRNG seed so post-resume randomness diverges.
+   * For /resume: draw a fresh CSPRNG seed so post-resume randomness diverges.
+   * (Time-relative state is rebased automatically inside the sim's step loop on
+   * the first tick after the wall-clock jump — see World.step.)
    */
   resumed(): void {
-    this.world?.onResume();
     this.world?.reseed(Rng.freshSeed());
   }
 

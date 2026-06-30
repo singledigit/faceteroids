@@ -104,18 +104,15 @@ export class World {
   }
 
   /**
-   * Called on /resume. The game clock is Date.now(), which is frozen while the VM
-   * is suspended and then jumps forward by the whole pause duration on resume.
-   * Every stored ABSOLUTE timestamp (fire cooldown, spawn-invuln, disconnect
-   * grace, bullet TTL) would otherwise instantly look "long past" — causing the
-   * ship to fire on its own (stale cooldown), the disconnect grace to falsely
-   * expire (respawn + invuln blink), etc. Shift them all forward by the gap so
-   * the time-RELATIVE deltas are preserved exactly as before the pause.
+   * The game clock is Date.now(), which is frozen while the VM is suspended and
+   * then jumps forward by the whole pause duration on resume. Every stored
+   * ABSOLUTE timestamp (fire cooldown, spawn-invuln, disconnect grace, bullet
+   * TTL) would otherwise instantly look "long past" — making the ship fire on
+   * its own (stale cooldown) and the disconnect grace falsely expire (respawn +
+   * invuln blink). Shift them all forward by the gap so the time-RELATIVE deltas
+   * are preserved exactly across the pause.
    */
-  onResume(): void {
-    if (this.lastStepAt === 0) return;
-    const gap = this.now() - this.lastStepAt;
-    if (gap <= 0) return;
+  private rebaseTime(gap: number): void {
     for (const p of this.players.values()) {
       p.lastFireAt += gap;
       if (p.respawnAt !== null) p.respawnAt += gap;
@@ -130,7 +127,6 @@ export class World {
       p.input = { seq: p.input.seq, thrust: false, rotate: 0, fire: false };
     }
     for (const b of this.bullets) b.expiresAt += gap;
-    this.lastStepAt = this.now();
   }
 
   addPlayer(id: string, name: string): void {
@@ -179,9 +175,14 @@ export class World {
   /** Host-triggered: begin the round from the lobby. No-op once playing. */
   start(): void {
     if (this.phase !== 'lobby') return;
-    // Re-spawn everyone fresh so positions/invuln are set at the true start.
+    // Ships already exist from join (and are shown in the lobby). Don't re-spawn
+    // them — that would teleport everyone to a new random spot the instant the
+    // game starts. Just (re)grant fresh spawn-invulnerability for the round.
+    const invulnUntil = this.now() + this.ruleset.spawnInvulnSeconds * 1000;
     for (const p of this.players.values()) {
-      if (p.connected) this.spawnShip(p);
+      if (!p.connected) continue;
+      if (p.ship) p.ship.spawnInvulnUntil = invulnUntil;
+      else this.spawnShip(p);
     }
     this.startRound();
   }
@@ -250,6 +251,16 @@ export class World {
   step(dt: number): void {
     this.tick++;
     const now = this.now();
+
+    // Detect a wall-clock jump (the VM was suspended) BEFORE any time-based logic
+    // runs this step, and rebase all absolute timestamps by the gap. Doing it
+    // here — not in the /resume hook — makes it immune to hook-vs-loop ordering.
+    // The threshold is well above normal scheduler jitter but below the shortest
+    // pause; the accumulator guards against catch-up, so we don't replay the gap.
+    if (this.lastStepAt !== 0) {
+      const gap = now - this.lastStepAt;
+      if (gap > 1000) this.rebaseTime(gap);
+    }
     this.lastStepAt = now;
 
     if (this.phase === 'playing') {

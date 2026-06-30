@@ -157,7 +157,7 @@ test('reconnect after the grace window respawns a fresh ship if lives remain', (
   assert.ok(reship?.alive, 'ffa respawns the player on return');
 });
 
-test('onResume rebases time so a suspend gap does not falsely expire timers', () => {
+test('step() rebases time across a suspend gap (no /resume hook call needed)', () => {
   const { world, tick, advance } = makeWorld('ffa');
   world.addPlayer('host', 'Host');
   world.addPlayer('g1', 'Ana');
@@ -168,17 +168,28 @@ test('onResume rebases time so a suspend gap does not falsely expire timers', ()
   advance(1000);
   world.removePlayer('g1');
 
-  // VM is suspended for 5 minutes — the wall clock jumps forward on resume.
+  // VM is suspended for 5 minutes — the wall clock jumps forward. Crucially we
+  // do NOT call onResume(): the rebase must happen inside step() so it's immune
+  // to the hook-vs-loop race that previously let the grace window falsely expire.
   advance(5 * 60 * 1000);
-  world.onResume();
   tick(2);
 
-  // Without rebasing, now - disconnectedAt would be ~5min > grace and the player
-  // would be wrongly killed. After rebasing, they're still in grace and resume
-  // restores the SAME ship.
   world.addPlayer('g1', 'Ana');
   const ship = world.snapshot().ships.find((s) => s.playerId === 'g1');
   assert.ok(ship?.alive, 'player survived the suspend gap (grace not falsely expired)');
+});
+
+test('start() does not move ships spawned at join (no teleport)', () => {
+  const { world } = makeWorld('ffa');
+  world.addPlayer('host', 'Host');
+  const before = world.snapshot().ships.find((s) => s.playerId === 'host')!;
+  const pos = { x: before.pos.x, y: before.pos.y };
+
+  world.start();
+
+  const after = world.snapshot().ships.find((s) => s.playerId === 'host')!;
+  assert.equal(after.pos.x, pos.x, 'ship x unchanged by start');
+  assert.equal(after.pos.y, pos.y, 'ship y unchanged by start');
 });
 
 test('last-standing: a disconnect within the grace window does NOT end the round', () => {
