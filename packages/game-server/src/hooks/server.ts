@@ -79,8 +79,9 @@ function handle(req: IncomingMessage, res: ServerResponse, game: GameServer): vo
         }
 
         case '/resume':
-          // Re-seed so randomness diverges from the pre-suspend memory state.
-          game.reseed();
+          // Rebase time-relative state across the suspend wall-clock jump and
+          // re-seed so randomness diverges from the pre-suspend memory state.
+          game.resumed();
           return ok(res);
 
         case '/suspend':

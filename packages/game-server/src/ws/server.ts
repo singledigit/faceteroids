@@ -66,8 +66,12 @@ export class GameServer {
     return this.wss !== null;
   }
 
-  /** For /resume: draw a fresh CSPRNG seed so post-resume randomness diverges. */
-  reseed(): void {
+  /**
+   * For /resume: rebase time-relative state across the suspend wall-clock jump,
+   * and draw a fresh CSPRNG seed so post-resume randomness diverges.
+   */
+  resumed(): void {
+    this.world?.onResume();
     this.world?.reseed(Rng.freshSeed());
   }
 

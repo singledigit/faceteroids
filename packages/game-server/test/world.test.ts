@@ -157,6 +157,30 @@ test('reconnect after the grace window respawns a fresh ship if lives remain', (
   assert.ok(reship?.alive, 'ffa respawns the player on return');
 });
 
+test('onResume rebases time so a suspend gap does not falsely expire timers', () => {
+  const { world, tick, advance } = makeWorld('ffa');
+  world.addPlayer('host', 'Host');
+  world.addPlayer('g1', 'Ana');
+  world.start();
+  tick(2); // record lastStepAt
+
+  // Player disconnects 1s before the pause (well within the 10s grace window).
+  advance(1000);
+  world.removePlayer('g1');
+
+  // VM is suspended for 5 minutes — the wall clock jumps forward on resume.
+  advance(5 * 60 * 1000);
+  world.onResume();
+  tick(2);
+
+  // Without rebasing, now - disconnectedAt would be ~5min > grace and the player
+  // would be wrongly killed. After rebasing, they're still in grace and resume
+  // restores the SAME ship.
+  world.addPlayer('g1', 'Ana');
+  const ship = world.snapshot().ships.find((s) => s.playerId === 'g1');
+  assert.ok(ship?.alive, 'player survived the suspend gap (grace not falsely expired)');
+});
+
 test('last-standing: a disconnect within the grace window does NOT end the round', () => {
   const { world, tick, advance } = makeWorld('lastStanding');
   world.addPlayer('host', 'Host');

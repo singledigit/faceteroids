@@ -13,6 +13,9 @@ export class InputSampler {
   /** Attach to a (re)connected client and begin sampling. Idempotent. */
   start(client: WsClient): void {
     this.stop(); // never double-register listeners or intervals
+    // Clear any keys believed "held": while detached (e.g. paused) we miss keyup
+    // events, so a stale held key would otherwise be re-sent on reconnect.
+    this.keys.clear();
     this.client = client;
     window.addEventListener('keydown', this.onDown);
     window.addEventListener('keyup', this.onUp);

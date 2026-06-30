@@ -89,6 +89,8 @@ export class World {
   private wave = 0;
   private winnerName: string | undefined;
   private events: SimEvent[] = [];
+  /** Wall-clock (ms) of the most recent step — used to detect the suspend gap. */
+  private lastStepAt = 0;
 
   constructor(
     private readonly ruleset: Ruleset,
@@ -99,6 +101,36 @@ export class World {
   /** Re-seed the RNG (called from the /resume hook). */
   reseed(seed: number): void {
     this.rng.reseed(seed);
+  }
+
+  /**
+   * Called on /resume. The game clock is Date.now(), which is frozen while the VM
+   * is suspended and then jumps forward by the whole pause duration on resume.
+   * Every stored ABSOLUTE timestamp (fire cooldown, spawn-invuln, disconnect
+   * grace, bullet TTL) would otherwise instantly look "long past" — causing the
+   * ship to fire on its own (stale cooldown), the disconnect grace to falsely
+   * expire (respawn + invuln blink), etc. Shift them all forward by the gap so
+   * the time-RELATIVE deltas are preserved exactly as before the pause.
+   */
+  onResume(): void {
+    if (this.lastStepAt === 0) return;
+    const gap = this.now() - this.lastStepAt;
+    if (gap <= 0) return;
+    for (const p of this.players.values()) {
+      p.lastFireAt += gap;
+      if (p.respawnAt !== null) p.respawnAt += gap;
+      if (p.disconnectedAt !== null) p.disconnectedAt += gap;
+      if (p.ship) {
+        p.ship.spawnInvulnUntil += gap;
+        p.ship.thrusting = false;
+      }
+      // Drop any held input frozen in the snapshot (e.g. fire/thrust that was
+      // down when paused) so the ship doesn't act on its own until the client
+      // sends fresh frames after reconnecting.
+      p.input = { seq: p.input.seq, thrust: false, rotate: 0, fire: false };
+    }
+    for (const b of this.bullets) b.expiresAt += gap;
+    this.lastStepAt = this.now();
   }
 
   addPlayer(id: string, name: string): void {
@@ -218,6 +250,7 @@ export class World {
   step(dt: number): void {
     this.tick++;
     const now = this.now();
+    this.lastStepAt = now;
 
     if (this.phase === 'playing') {
       this.expireDisconnects(now);
