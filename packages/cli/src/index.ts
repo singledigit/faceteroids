@@ -12,7 +12,7 @@ function usage(): never {
   console.log(`game-admin <command>
 
   build-image                 Bundle, upload, and build the MicroVM image (-> ACTIVE)
-  set-secret   [value]        Set the JWT signing secret in SSM (random if omitted)
+  set-secret   [value]        Set the guest-token signing secret in SSM (random if omitted)
   create-user  <username> [password]  Create a host user (prompts if password omitted)
   list-users                  List host usernames
   delete-user  <username>     Delete a host user

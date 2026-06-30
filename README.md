@@ -43,9 +43,10 @@ flowchart LR
 Two planes that never mix:
 
 - **Control plane** (`packages/control-plane`, `packages/infra`) — Lambda + API
-  Gateway (HTTP API) + DynamoDB, deployed with AWS CDK. Handles host login (JWT),
-  room lifecycle (`RunMicrovm` / `TerminateMicrovm`), and minting short-lived
-  MicroVM auth tokens. Also hosts the static web client on S3 + CloudFront.
+  Gateway (HTTP API) + DynamoDB + Cognito, deployed with AWS CDK. Handles host
+  login (Cognito), room lifecycle (`RunMicrovm` / `Suspend` / `Resume` /
+  `TerminateMicrovm`), and minting short-lived MicroVM auth tokens. Also hosts
+  the static web client on S3 + CloudFront.
 - **Data plane** (`packages/game-server`) — runs *inside* each MicroVM. The
   browser connects a WebSocket **directly** to the room's MicroVM endpoint. Auth
   and target port travel as `lambda-microvms.*` WebSocket subprotocols (browsers
@@ -130,7 +131,9 @@ npx vite build packages/web
 ( cd packages/infra && npx cdk deploy --all --require-approval never )
 #    Outputs: AsteroidsApi.ApiUrl and AsteroidsApi.WebUrl (the playable URL).
 
-# 2. Set the guest-token signing secret (out-of-band; not stored in the template).
+# 2. Set the guest-token signing secret in SSM. Required (guest joins fail
+#    without it). It's a SecureString, which CloudFormation can't create with a
+#    real value, so it's set out-of-band here rather than by the CDK stack.
 npm run cli --workspace @game/cli -- set-secret
 
 # 3. Build + publish the MicroVM image (bundle -> S3 -> CreateMicrovmImage -> ACTIVE).
@@ -167,14 +170,14 @@ the disconnect count as a death / last-standing elimination.)
 |---|---|
 | `build-image` | Bundle, upload, build the MicroVM image → ACTIVE |
 | `set-secret [value]` | Set the guest-token signing secret in SSM (random if omitted) |
-| `create-user <name>` | Create a host user in Cognito (prompts for password) |
+| `create-user <name> [password]` | Create a host user in Cognito (prompts for password if omitted) |
 | `list-users` | List host users (Cognito) |
 | `delete-user <name>` | Delete a host user (Cognito) |
 | `run-room [mode]` | Manually run a MicroVM + mint a token (data-plane test) |
 | `prune-images` | Delete old image versions (keep the latest ACTIVE) |
 
-> `create-user` reads the password from an interactive TTY (no echo); it won't
-> work through a pipe.
+> Omit the password and `create-user` prompts for it on an interactive TTY (no
+> echo); pass it as an argument for scripts / non-interactive shells.
 
 ## Cost & teardown
 
