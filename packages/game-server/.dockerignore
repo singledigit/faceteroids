@@ -1,0 +1,8 @@
+node_modules
+src
+tsconfig.json
+*.tsbuildinfo
+dist/*.js
+dist/*.d.ts
+dist/*.map
+!dist/bundle.mjs

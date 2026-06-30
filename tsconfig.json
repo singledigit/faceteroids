@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/game-server" },
+    { "path": "packages/web" },
+    { "path": "packages/control-plane" },
+    { "path": "packages/cli" }
+  ]
+}

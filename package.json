@@ -1,0 +1,28 @@
+{
+  "name": "micro-vm-games",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multiplayer Asteroids on AWS Lambda MicroVMs",
+  "workspaces": [
+    "packages/shared",
+    "packages/game-server",
+    "packages/web",
+    "packages/control-plane",
+    "packages/cli",
+    "packages/infra"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "dev:server": "npm run dev --workspace @game/game-server",
+    "dev:web": "npm run dev --workspace @game/web",
+    "test": "npm test --workspace @game/game-server",
+    "typecheck": "tsc --build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@game/infra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "infra": "bin/app.js" },
+  "scripts": {
+    "build": "tsc --build",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --all --require-approval never",
+    "diff": "cdk diff",
+    "destroy": "cdk destroy --all"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.150.0",
+    "tsx": "^4.19.0"
+  }
+}
