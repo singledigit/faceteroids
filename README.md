@@ -54,11 +54,11 @@ Two planes that never mix:
 
 ```
 packages/
-  shared/         wire protocol, entities, mode rulesets, JWT claims, API DTOs
+  shared/         wire protocol, entities, mode rulesets, API DTOs
   game-server/    authoritative sim (30Hz) + ws server (:8080) + lifecycle hooks (:9000)
   web/            vanilla TS + canvas client (input sampling, snapshot interpolation)
   control-plane/  Lambda router: login, rooms, tokens
-  cli/            admin: build-image / set-secret / create-user / run-room / prune-images
+  cli/            admin: build-image / create-user / run-room / prune-images
   infra/          AWS CDK stacks (data, IAM, API + web hosting)
 ```
 
