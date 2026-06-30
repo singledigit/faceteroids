@@ -120,6 +120,12 @@ Open `AsteroidsApi.WebUrl` in a browser:
 > The client resolves the API at runtime from `/config.json` (written by CDK), so
 > the same static build works regardless of the API URL.
 
+**Refresh-safe:** the client persists a per-tab session (`sessionStorage`), so a
+browser refresh reconnects to the same room with the same identity — the host
+stays host, a guest keeps its ship and score. The short-lived WS token isn't
+stored; it's re-minted on resume via `/tokens/{roomId}/refresh`. If the room has
+since closed, the client falls back to the lobby.
+
 ### Admin CLI (`game-admin`)
 
 | Command | Purpose |

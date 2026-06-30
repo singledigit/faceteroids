@@ -7,12 +7,17 @@ import { refreshToken } from './api.js';
 
 export class TokenRefresher {
   private timer: number | null = null;
+  private readonly subscribers: Array<(wsToken: string) => void> = [];
 
   constructor(
     private readonly roomId: string,
     private readonly authJwt: string,
-    private readonly onToken: (wsToken: string) => void,
   ) {}
+
+  /** Register a callback invoked with each freshly minted WS token. */
+  onToken(fn: (wsToken: string) => void): void {
+    this.subscribers.push(fn);
+  }
 
   /** Schedule the next refresh based on the current token's expiry. */
   schedule(expiresAt: number): void {
@@ -24,7 +29,7 @@ export class TokenRefresher {
   private async refresh(): Promise<void> {
     try {
       const res = await refreshToken(this.roomId, this.authJwt);
-      this.onToken(res.wsToken);
+      for (const fn of this.subscribers) fn(res.wsToken);
       this.schedule(res.wsTokenExpiresAt);
     } catch {
       // Retry sooner on failure.

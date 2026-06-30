@@ -123,6 +123,29 @@ test('playerCount tracks connect/disconnect', () => {
   assert.equal(world.playerCount(), 1);
 });
 
+test('reconnect (refresh) preserves score and re-spawns a live ship', () => {
+  const { world } = makeWorld('ffa');
+  world.addPlayer('g1', 'Ana');
+  world.start();
+  // Give the player a score, then snapshot it.
+  const ship = world.snapshot().ships.find((s) => s.playerId === 'g1')!;
+  ship.score = 42;
+  const before = world.snapshot().scoreboard.find((e) => e.playerId === 'g1')!;
+  assert.equal(before.score, 42);
+
+  // Disconnect (close tab) then reconnect with the SAME id (refresh).
+  world.removePlayer('g1');
+  assert.equal(world.playerCount(), 0);
+  world.addPlayer('g1', 'Ana');
+
+  assert.equal(world.playerCount(), 1, 'counted as connected again');
+  const after = world.snapshot();
+  const entry = after.scoreboard.find((e) => e.playerId === 'g1')!;
+  assert.equal(entry.score, 42, 'score survived the reconnect');
+  const reship = after.ships.find((s) => s.playerId === 'g1');
+  assert.ok(reship?.alive, 're-spawned a live ship to rejoin the round');
+});
+
 test('last-standing: round ends with a winner when one ship remains', () => {
   const { world, tick, advance } = makeWorld('lastStanding');
   world.addPlayer('host', 'Host');

@@ -9,6 +9,7 @@ import { InputSampler } from './input/sampler.js';
 import { SnapshotBuffer } from './render/interp.js';
 import { Renderer } from './render/canvas.js';
 import { TokenRefresher } from './net/tokenRefresh.js';
+import { clearSession, loadSession, saveSession, type Session } from './net/session.js';
 import * as api from './net/api.js';
 
 const params = new URLSearchParams(location.search);
@@ -32,6 +33,8 @@ interface PlayConfig {
   hostToken?: string;
   /** Per-room secret proving host authority on the gameplay WS (host only). */
   hostSecret?: string;
+  /** Persisted so a refresh resumes the same room as the same identity. */
+  session?: Session;
   /** Called after the host ends the game (returns host to the lobby). */
   onEnded?: () => void;
 }
@@ -43,6 +46,9 @@ function startGame(cfg: PlayConfig): void {
   myPlayerId = cfg.playerId;
   let ended = false;
 
+  // Persist the session so a browser refresh resumes this exact room + identity.
+  if (cfg.session) saveSession(cfg.session);
+
   const buffer = new SnapshotBuffer();
   const renderer = new Renderer($('canvas') as HTMLCanvasElement, () => myPlayerId);
   let currentToken = cfg.wsToken;
@@ -50,6 +56,11 @@ function startGame(cfg: PlayConfig): void {
   // One sampler per game session — re-pointed at each (re)connected client. A
   // fresh sampler per reconnect would stack key listeners and 60Hz send loops.
   const sampler = new InputSampler();
+
+  // Keep currentToken fresh so reconnects (and the next refresh) use a live token.
+  cfg.refresher?.onToken((wsToken) => {
+    currentToken = wsToken;
+  });
 
   const connect = () => {
     sampler.stop(); // detach from any prior socket before reconnecting
@@ -71,7 +82,14 @@ function startGame(cfg: PlayConfig): void {
         else if (msg.t === 'snapshot') {
           buffer.push(msg.snapshot, performance.now());
           updateHud(msg.snapshot.phase);
-        } else if (msg.t === 'bye') setStatus(`Disconnected: ${msg.reason}`);
+        } else if (msg.t === 'bye') {
+          // Terminal: the room is gone or we're not allowed. Don't auto-reconnect,
+          // and drop the stale session so a refresh returns to the lobby.
+          ended = true;
+          sampler.stop();
+          clearSession();
+          setStatus(`Disconnected: ${msg.reason}`);
+        }
       },
     });
     activeClient = client;
@@ -112,6 +130,7 @@ function startGame(cfg: PlayConfig): void {
         /* VM may already be gone */
       }
       cfg.refresher?.clear();
+      clearSession(); // room is gone; a refresh should land in the lobby
       activeClient?.close();
       // Tear down the game view and host controls, then return to the lobby.
       $('share').style.display = 'none';
@@ -165,13 +184,22 @@ function guestFlow(roomId: string): void {
       setStatus('Joining room…');
       const join = await api.joinRoom(roomId, name);
       $('status').style.display = 'none';
-      const refresher = new TokenRefresher(roomId, join.guestJwt, () => {});
+      const refresher = new TokenRefresher(roomId, join.guestJwt);
       startGame({
         endpoint: join.endpoint,
         wsToken: join.wsToken,
         name,
         playerId: join.guestId,
         refresher,
+        session: {
+          kind: 'guest',
+          roomId,
+          endpoint: join.endpoint,
+          mode: join.mode,
+          name,
+          guestId: join.guestId,
+          guestJwt: join.guestJwt,
+        },
       });
     } catch (err) {
       setStatus(`Join failed: ${(err as Error).message}`);
@@ -222,7 +250,7 @@ function showCreateScreen(token: string): void {
       await waitForRoom(room.roomId);
       $('status').style.display = 'none';
       showShareLink(room.joinUrl);
-      const refresher = new TokenRefresher(room.roomId, token, () => {});
+      const refresher = new TokenRefresher(room.roomId, token);
       startGame({
         endpoint: room.endpoint,
         wsToken: room.wsToken,
@@ -233,6 +261,15 @@ function showCreateScreen(token: string): void {
         roomId: room.roomId,
         hostToken: token,
         hostSecret: room.hostSecret,
+        session: {
+          kind: 'host',
+          roomId: room.roomId,
+          endpoint: room.endpoint,
+          mode,
+          name,
+          hostToken: token,
+          hostSecret: room.hostSecret,
+        },
         onEnded: () => showCreateScreen(token),
       });
     } catch (err) {
@@ -291,9 +328,55 @@ function showLobby(flow: 'host' | 'guest' | 'local'): void {
     flow === 'host' ? 'Host a game' : flow === 'guest' ? 'Join the game' : 'Local play';
 }
 
+// ---- Resume after refresh ----
+// Re-mint a WS token for the saved room (its short-lived token wasn't stored) and
+// reconnect with the SAME identity: host stays host (secret + Cognito token kept);
+// a guest keeps their guestId, so the server treats it as a reconnect and their
+// ship/score persist. If the room is gone, drop the session and fall back.
+async function resumeFlow(s: Session, fallback: () => void): Promise<void> {
+  showLobby(s.kind === 'host' ? 'host' : 'guest');
+  setStatus('Reconnecting to your game…');
+  try {
+    const status = await api.getRoomStatus(s.roomId);
+    if (status.status === 'CLOSED' || status.status === 'TERMINATED') {
+      throw new Error('room closed');
+    }
+    const authJwt = s.kind === 'host' ? s.hostToken : s.guestJwt;
+    const { wsToken } = await api.refreshToken(s.roomId, authJwt);
+    $('status').style.display = 'none';
+
+    const refresher = new TokenRefresher(s.roomId, authJwt);
+    if (s.kind === 'host') {
+      showShareLink(`${location.origin}/?room=${s.roomId}`);
+      startGame({
+        endpoint: s.endpoint, wsToken, name: s.name, playerId: 'host', refresher,
+        isHost: true, roomId: s.roomId, hostToken: s.hostToken, hostSecret: s.hostSecret,
+        session: s, onEnded: () => showCreateScreen(s.hostToken),
+      });
+    } else {
+      startGame({
+        endpoint: s.endpoint, wsToken, name: s.name, playerId: s.guestId, refresher, session: s,
+      });
+    }
+  } catch {
+    clearSession();
+    setStatus('Your previous game has ended.');
+    fallback();
+  }
+}
+
 // ---- Entry ----
 const serverUrl = params.get('server');
 const roomId = params.get('room');
-if (serverUrl) localFlow(serverUrl);
-else if (roomId) guestFlow(roomId);
-else hostFlow();
+const saved = loadSession();
+
+if (serverUrl) {
+  localFlow(serverUrl);
+} else if (saved) {
+  // A refresh: resume the saved room. Fall back to the URL-appropriate flow.
+  void resumeFlow(saved, () => (roomId ? guestFlow(roomId) : hostFlow()));
+} else if (roomId) {
+  guestFlow(roomId);
+} else {
+  hostFlow();
+}

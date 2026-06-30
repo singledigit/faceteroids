@@ -92,9 +92,16 @@ export class World {
   addPlayer(id: string, name: string): void {
     let p = this.players.get(id);
     if (p) {
-      // Reconnect: keep score/lives, mark connected.
+      // Reconnect (e.g. browser refresh): keep score/lives, mark connected.
       p.connected = true;
       p.name = name;
+      // Disconnect left the ship dead. If the round is live and the player still
+      // has lives, give them a fresh ship (preserving score/lives via spawnShip)
+      // so they rejoin the action. Permanently-eliminated players stay out.
+      const lives = p.ship?.lives ?? this.ruleset.lives;
+      if (this.phase === 'playing' && !p.ship?.alive && (this.ruleset.respawn || lives > 0)) {
+        this.spawnShip(p);
+      }
       return;
     }
     p = {
@@ -127,7 +134,9 @@ export class World {
     const p = this.players.get(id);
     if (!p) return;
     p.connected = false;
-    p.ship = null;
+    // Keep the (now-dead) ship so a reconnect can restore score/lives; just take
+    // it out of play. Nulling it would lose the player's progress on refresh.
+    if (p.ship) p.ship.alive = false;
     // In last-standing, a disconnect counts as elimination; re-check the round.
     if (this.ruleset.lastAliveWins) this.checkLastStanding();
   }
