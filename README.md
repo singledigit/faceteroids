@@ -100,13 +100,13 @@ npx vite build packages/web
 ( cd packages/infra && npx cdk deploy --all --require-approval never )
 #    Outputs: AsteroidsApi.ApiUrl and AsteroidsApi.WebUrl (the playable URL).
 
-# 2. Set the JWT signing secret (out-of-band; not stored in the template).
+# 2. Set the guest-token signing secret (out-of-band; not stored in the template).
 npm run cli --workspace @game/cli -- set-secret
 
 # 3. Build + publish the MicroVM image (bundle -> S3 -> CreateMicrovmImage -> ACTIVE).
 npm run cli --workspace @game/cli -- build-image
 
-# 4. Create a host login (interactive password prompt — run in a real terminal).
+# 4. Create a host login in Cognito (interactive password prompt — real terminal).
 npm run cli --workspace @game/cli -- create-user alice
 ```
 
@@ -125,10 +125,10 @@ Open `AsteroidsApi.WebUrl` in a browser:
 | Command | Purpose |
 |---|---|
 | `build-image` | Bundle, upload, build the MicroVM image → ACTIVE |
-| `set-secret [value]` | Set the JWT signing secret in SSM (random if omitted) |
-| `create-user <name>` | Create a host user (prompts for password, bcrypt → DynamoDB) |
-| `list-users` | List host users |
-| `delete-user <name>` | Delete a host user |
+| `set-secret [value]` | Set the guest-token signing secret in SSM (random if omitted) |
+| `create-user <name>` | Create a host user in Cognito (prompts for password) |
+| `list-users` | List host users (Cognito) |
+| `delete-user <name>` | Delete a host user (Cognito) |
 | `run-room [mode]` | Manually run a MicroVM + mint a token (data-plane test) |
 | `prune-images` | Delete old image versions (keep the latest ACTIVE) |
 
@@ -151,15 +151,30 @@ npm run cli --workspace @game/cli -- prune-images   # delete inactive image vers
 
 ## Security notes
 
-- Host accounts are **CLI-created only** (bcrypt, cost 12); there is no public
-  registration. Login issues a short-lived HS256 JWT (secret in SSM SecureString).
+- **Host accounts live in Amazon Cognito** with self-registration **disabled** —
+  accounts exist only via `game-admin create-user` (AdminCreateUser). Login uses
+  the admin auth flow and returns a Cognito ID token (RS256), which the control
+  plane verifies against the pool's public JWKS. No password hashing or shared
+  login secret to get wrong.
+- **Guests are anonymous and ephemeral** — never Cognito users. They get a small
+  room-scoped HS256 token (signing secret in SSM SecureString, set out-of-band)
+  used only to authorize their own refresh/status calls.
 - MicroVM auth tokens are scoped to a single VM and the gameplay port only, and
   expire within 60 min (the client refreshes proactively). A guest of one room
   cannot mint a token for another.
 - Host-only powers (start the round) are gated by a per-room secret delivered only
   to the room creator — not by a client-claimed identity.
-- IAM roles are least-privilege with `aws:SourceAccount` + `aws:SourceArn`
-  confused-deputy conditions; the in-VM execution role has logs-only access.
+- IAM roles are least-privilege with an `aws:SourceAccount` confused-deputy
+  condition; the in-VM execution role has logs-only access.
+
+### Why Cognito for hosts (and not guests)
+
+Hosts are credentialed users, so they get a managed identity provider: Cognito
+handles password storage, lockout, and token signing/rotation, and disabling
+self-sign-up enforces the "CLI-provisioned only" requirement cleanly. Guests are
+deliberately *not* in the pool — they're throwaway identities tied to one room,
+so a tiny custom token is the right tool and keeps the two trust domains separate
+(Cognito RS256 for hosts, HS256 for guests; the API accepts both).
 
 ## License
 

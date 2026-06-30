@@ -6,7 +6,8 @@ import type {
   APIGatewayProxyResultV2,
 } from 'aws-lambda';
 import type { Claims } from '@game/shared';
-import { verify } from './jwt.js';
+import { verifyGuest } from './jwt.js';
+import { verifyHostToken } from './cognito.js';
 
 const CORS = {
   'access-control-allow-origin': '*',
@@ -47,11 +48,16 @@ export function parseBody<T>(event: APIGatewayProxyEventV2): T | null {
   }
 }
 
-/** Extract and verify the Bearer JWT from the Authorization header. */
+/**
+ * Extract and verify the Bearer token. Two issuers: hosts present a Cognito ID
+ * token (RS256, verified against the pool JWKS); guests present our own ephemeral
+ * HS256 token. We try host first, then guest.
+ */
 export async function authClaims(event: APIGatewayProxyEventV2): Promise<Claims | null> {
   const header = event.headers?.authorization ?? event.headers?.Authorization;
   if (!header?.startsWith('Bearer ')) return null;
-  return verify(header.slice(7));
+  const token = header.slice(7);
+  return (await verifyHostToken(token)) ?? (await verifyGuest(token));
 }
 
 export function pathParam(event: APIGatewayProxyEventV2, name: string): string | undefined {

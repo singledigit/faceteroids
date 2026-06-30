@@ -1,7 +1,7 @@
-// DynamoDB single-table access. Item shapes follow the plan's data model:
-//   User  PK=USER#<username>  SK=PROFILE
+// DynamoDB single-table access. Item shapes:
 //   Room  PK=ROOM#<roomId>    SK=META
 //   Guest PK=ROOM#<roomId>    SK=GUEST#<guestId>
+// (Host accounts live in Cognito, not here.)
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
@@ -16,15 +16,6 @@ import { REGION, TABLE_NAME } from './config.js';
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {
   marshallOptions: { removeUndefinedValues: true },
 });
-
-export interface UserItem {
-  PK: string;
-  SK: 'PROFILE';
-  userId: string;
-  username: string;
-  passwordHash: string;
-  createdAt: number;
-}
 
 export interface RoomItem {
   PK: string;
@@ -42,15 +33,7 @@ export interface RoomItem {
   expiresAt: number; // TTL (epoch seconds)
 }
 
-const userPK = (username: string) => `USER#${username.toLowerCase()}`;
 const roomPK = (roomId: string) => `ROOM#${roomId}`;
-
-export async function getUser(username: string): Promise<UserItem | null> {
-  const res = await doc.send(
-    new GetCommand({ TableName: TABLE_NAME, Key: { PK: userPK(username), SK: 'PROFILE' } }),
-  );
-  return (res.Item as UserItem | undefined) ?? null;
-}
 
 export async function getRoom(roomId: string): Promise<RoomItem | null> {
   const res = await doc.send(
@@ -89,4 +72,4 @@ export async function adjustPlayerCount(roomId: string, delta: number): Promise<
   return (res.Attributes?.playerCount as number | undefined) ?? 0;
 }
 
-export { userPK, roomPK };
+export { roomPK };

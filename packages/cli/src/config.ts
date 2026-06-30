@@ -24,6 +24,7 @@ export const BUILD_ROLE_ARN =
   process.env.BUILD_ROLE_ARN ?? `arn:aws:iam::${ACCOUNT_ID}:role/AsteroidsMicroVmBuildRole`;
 export const DATA_STACK = 'AsteroidsData';
 export const IAM_STACK = 'AsteroidsIam';
+export const API_STACK = 'AsteroidsApi';
 
 /** Gameplay + hooks ports inside the MicroVM. */
 export const GAME_PORT = 8080;

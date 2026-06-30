@@ -13,7 +13,11 @@ export const REGION = process.env.AWS_REGION ?? 'us-west-2';
 export const TABLE_NAME = required('TABLE_NAME');
 export const MICROVM_IMAGE_ARN = required('MICROVM_IMAGE_ARN');
 export const EXECUTION_ROLE_ARN = required('EXECUTION_ROLE_ARN');
+// Guest-token signing secret (HS256). Host tokens are Cognito-issued (RS256).
 export const JWT_SECRET_PARAM = process.env.JWT_SECRET_PARAM ?? '/asteroids/jwt-secret';
+// Cognito host identity pool (self-registration disabled).
+export const COGNITO_USER_POOL_ID = required('COGNITO_USER_POOL_ID');
+export const COGNITO_CLIENT_ID = required('COGNITO_CLIENT_ID');
 /** Base URL of the static web client, used to build shareable join links. */
 export const WEB_BASE_URL = process.env.WEB_BASE_URL ?? 'http://localhost:5173';
 

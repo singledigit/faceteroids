@@ -7,18 +7,13 @@ import {
 } from '@aws-sdk/client-cloudformation';
 import { LambdaMicrovms } from '@aws-sdk/client-lambda-microvms';
 import { S3Client } from '@aws-sdk/client-s3';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { REGION } from '../config.js';
 
 export const microvms = new LambdaMicrovms({ region: REGION });
 export const s3 = new S3Client({ region: REGION });
 export const cfn = new CloudFormationClient({ region: REGION });
-
-const ddbBase = new DynamoDBClient({ region: REGION });
-export const ddb = DynamoDBDocumentClient.from(ddbBase, {
-  marshallOptions: { removeUndefinedValues: true },
-});
+export const cognito = new CognitoIdentityProviderClient({ region: REGION });
 
 /** Resolve a CloudFormation stack output value by logical-ish key match. */
 export async function stackOutput(stackName: string, outputKeyContains: string): Promise<string> {

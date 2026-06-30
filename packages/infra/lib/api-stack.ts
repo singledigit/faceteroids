@@ -14,6 +14,12 @@ import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { HttpApi, HttpMethod, CorsHttpMethod, CfnStage } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { PolicyStatement, Effect, type IRole } from 'aws-cdk-lib/aws-iam';
+import {
+  UserPool,
+  UserPoolClient,
+  AccountRecovery,
+  ClientAttributes,
+} from 'aws-cdk-lib/aws-cognito';
 import { Bucket, BlockPublicAccess } from 'aws-cdk-lib/aws-s3';
 import {
   Distribution,
@@ -75,8 +81,30 @@ export class ApiStack extends Stack {
     });
     const webBaseUrl = `https://${distribution.distributionDomainName}`;
 
-    // Reference (don't create) the JWT signing secret — set out-of-band via
-    // `game-admin set-secret`. We only grant the Lambda read access to its ARN.
+    // --- Host identity: Cognito user pool (self-registration DISABLED) ---
+    // Hosts are the only credentialed users; guests are anonymous and never
+    // enter the pool. Accounts are created out-of-band via `game-admin
+    // create-user` (AdminCreateUser) — there is no public sign-up.
+    const userPool = new UserPool(this, 'HostUserPool', {
+      userPoolName: 'AsteroidsHosts',
+      selfSignUpEnabled: false,
+      signInAliases: { username: true },
+      accountRecovery: AccountRecovery.NONE,
+      passwordPolicy: { minLength: 8, requireLowercase: true, requireDigits: true },
+      removalPolicy: RemovalPolicy.DESTROY, // sample project; users are CLI-recreated
+    });
+    const userPoolClient = new UserPoolClient(this, 'HostUserPoolClient', {
+      userPool,
+      generateSecret: false, // public client; admin auth flow only
+      authFlows: { adminUserPassword: true },
+      idTokenValidity: Duration.hours(12),
+      accessTokenValidity: Duration.hours(12),
+      readAttributes: new ClientAttributes().withStandardAttributes({}),
+    });
+
+    // Reference (don't create) the guest-token signing secret — set out-of-band
+    // via `game-admin set-secret`. Used ONLY for ephemeral guest JWTs (HS256);
+    // host tokens are Cognito-issued (RS256). We only grant the Lambda read.
     const jwtSecretArn = Arn.format(
       { service: 'ssm', resource: 'parameter', resourceName: JWT_SECRET_PARAM.replace(/^\//, '') },
       this,
@@ -114,11 +142,21 @@ export class ApiStack extends Stack {
         EXECUTION_ROLE_ARN: props.executionRole.roleArn,
         JWT_SECRET_PARAM,
         WEB_BASE_URL: webBaseUrl,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
       },
     });
 
     // --- Permissions (least privilege) ---
     props.table.grantReadWriteData(fn);
+    // Authenticate hosts against Cognito (admin auth flow).
+    fn.addToRolePolicy(
+      new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions: ['cognito-idp:AdminInitiateAuth'],
+        resources: [userPool.userPoolArn],
+      }),
+    );
     // Read + decrypt the JWT secret (SecureString uses the SSM-managed KMS key,
     // whose decrypt is implicit for the parameter owner).
     fn.addToRolePolicy(
@@ -207,6 +245,8 @@ export class ApiStack extends Stack {
 
     this.apiUrl = api.apiEndpoint;
     new CfnOutput(this, 'ApiUrl', { value: api.apiEndpoint });
+    new CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
+    new CfnOutput(this, 'UserPoolClientId', { value: userPoolClient.userPoolClientId });
 
     // Deploy the built client + a runtime config.json carrying the API URL, so
     // the static bundle resolves the API at load time (no rebuild on URL change).
