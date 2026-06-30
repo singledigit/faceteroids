@@ -210,14 +210,6 @@ function guestFlow(roomId: string): void {
 // ---- Flow 3: host ----
 function hostFlow(): void {
   showLobby('host');
-  const modeSel = $('mode') as HTMLSelectElement;
-  for (const m of GAME_MODES) {
-    const opt = document.createElement('option');
-    opt.value = m;
-    opt.textContent = MODE_LABELS[m];
-    modeSel.appendChild(opt);
-  }
-
   ($('login') as HTMLButtonElement).onclick = async () => {
     const username = ($('username') as HTMLInputElement).value.trim();
     const password = ($('password') as HTMLInputElement).value;
@@ -233,12 +225,32 @@ function hostFlow(): void {
   };
 }
 
+/** Populate the mode <select> once (idempotent — safe to call repeatedly). */
+function populateModes(): void {
+  const modeSel = $('mode') as HTMLSelectElement;
+  if (modeSel.options.length > 0) return;
+  for (const m of GAME_MODES) {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = MODE_LABELS[m];
+    modeSel.appendChild(opt);
+  }
+}
+
 /** Show the create-room screen for a logged-in host. Reused on first login and
- *  when the host ends a game and returns to the lobby (still authenticated). */
+ *  when the host ends a game and returns to the lobby (still authenticated). It
+ *  is fully self-contained — it does NOT assume hostFlow() ran first, because a
+ *  resumed (post-refresh) session reaches End game without ever calling it. */
 function showCreateScreen(token: string): void {
+  populateModes();
   $('game').style.display = 'none';
+  $('hostbar').style.display = 'none';
+  $('share').style.display = 'none';
+  $('status').style.display = 'none';
   $('lobby').style.display = 'block';
+  $('flow-title').textContent = 'Host a game';
   $('login-box').style.display = 'none';
+  $('join-box').style.display = 'none';
   $('create-box').style.display = 'block';
 
   ($('create') as HTMLButtonElement).onclick = async () => {
