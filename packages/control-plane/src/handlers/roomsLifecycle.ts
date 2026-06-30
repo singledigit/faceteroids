@@ -42,9 +42,15 @@ export async function roomsSuspend(
   if (r.room.status === 'CLOSED' || r.room.status === 'TERMINATED') {
     return badRequest('room is not running');
   }
+  // Mark SUSPENDED BEFORE suspending the VM. Otherwise there's a window where the
+  // VM is suspending but the room still reads RUNNING — a guest whose socket just
+  // dropped would then reconnect, and that ingress traffic auto-resumes the VM,
+  // un-pausing the game. We revert to RUNNING if the suspend call fails.
+  await setRoomStatus(r.roomId, 'SUSPENDED');
   try {
     await suspendVm(r.room.microvmId);
   } catch (err) {
+    await setRoomStatus(r.roomId, 'RUNNING');
     // The VM rejects suspend unless it's RUNNING (e.g. still booting). Surface a
     // clear 409 so the client can tell the host to try again in a moment.
     if (err instanceof Error && err.name === 'ConflictException') {
@@ -52,7 +58,6 @@ export async function roomsSuspend(
     }
     throw err;
   }
-  await setRoomStatus(r.roomId, 'SUSPENDED');
   return ok({ roomId: r.roomId, status: 'SUSPENDED' });
 }
 

@@ -37,7 +37,14 @@ const roomPK = (roomId: string) => `ROOM#${roomId}`;
 
 export async function getRoom(roomId: string): Promise<RoomItem | null> {
   const res = await doc.send(
-    new GetCommand({ TableName: TABLE_NAME, Key: { PK: roomPK(roomId), SK: 'META' } }),
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: roomPK(roomId), SK: 'META' },
+      // Strongly consistent: a guest checking status right after the host pauses
+      // must see SUSPENDED, not a stale RUNNING — otherwise it reconnects and its
+      // ingress traffic auto-resumes the VM (un-pausing the game).
+      ConsistentRead: true,
+    }),
   );
   return (res.Item as RoomItem | undefined) ?? null;
 }
