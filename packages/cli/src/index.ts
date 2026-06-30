@@ -2,7 +2,7 @@
 // Admin CLI. Uses the developer's own AWS credentials (admin), NOT the
 // control-plane role.
 
-import { buildImage } from './commands/buildImage.js';
+import { bundleImage } from './commands/bundleImage.js';
 import { runRoom } from './commands/runRoom.js';
 import { createUser, deleteUser, listUsers } from './commands/users.js';
 import { pruneImages } from './commands/pruneImages.js';
@@ -10,7 +10,9 @@ import { pruneImages } from './commands/pruneImages.js';
 function usage(): never {
   console.log(`game-admin <command>
 
-  build-image                 Bundle, upload, and build the MicroVM image (-> ACTIVE)
+  bundle-image                Bundle + zip + upload the artifact to S3 (local prep).
+                              Then build the image with 'aws lambda-microvms
+                              create-microvm-image' — see README.
   create-user  <username> [password]  Create a host user (prompts if password omitted)
   list-users                  List host usernames
   delete-user  <username>     Delete a host user
@@ -23,8 +25,8 @@ function usage(): never {
 async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
   switch (cmd) {
-    case 'build-image':
-      await buildImage();
+    case 'bundle-image':
+      await bundleImage();
       break;
     case 'create-user':
       await createUser(args[0], args[1]);

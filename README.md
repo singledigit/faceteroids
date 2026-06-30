@@ -58,7 +58,7 @@ packages/
   game-server/    authoritative sim (30Hz) + ws server (:8080) + lifecycle hooks (:9000)
   web/            vanilla TS + canvas client (input sampling, snapshot interpolation)
   control-plane/  Lambda router: login, rooms, tokens
-  cli/            admin: build-image / create-user / run-room / prune-images
+  cli/            admin: bundle-image / create-user / run-room / prune-images
   infra/          AWS CDK stacks (data, IAM, API + web hosting)
 ```
 
@@ -131,8 +131,34 @@ npx vite build packages/web
 ( cd packages/infra && npx cdk deploy --all --require-approval never )
 #    Outputs: AsteroidsApi.ApiUrl and AsteroidsApi.WebUrl (the playable URL).
 
-# 2. Build + publish the MicroVM image (bundle -> S3 -> CreateMicrovmImage -> ACTIVE).
-npm run cli --workspace @game/cli -- build-image
+# 2a. Bundle the game server + Dockerfile and upload the artifact to S3 (local
+#     prep only — esbuild + zip + S3). Prints the s3:// URI to use below.
+npm run cli --workspace @game/cli -- bundle-image
+CODE_ARTIFACT=s3://<bucket>/microvm-images/asteroids-<stamp>.zip   # from the output above
+
+# 2b. Build the MicroVM image — the actual Lambda MicroVMs service call. AWS
+#     compiles the Dockerfile into the image server-side (no local Docker).
+BASE_IMAGE="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
+BUILD_ROLE=$(aws cloudformation describe-stacks --stack-name AsteroidsIam \
+  --query "Stacks[0].Outputs[?OutputKey=='BuildRoleArn'].OutputValue" --output text)
+aws lambda-microvms create-microvm-image \
+  --region "$AWS_REGION" \
+  --name asteroids \
+  --base-image-arn "$BASE_IMAGE" \
+  --build-role-arn "$BUILD_ROLE" \
+  --code-artifact "{\"uri\":\"$CODE_ARTIFACT\"}" \
+  --hooks "$(cat packages/game-server/image-runtime.json)" \
+  --environment-variables '{"GAME_PORT":"8080","HOOK_PORT":"9000","HOOKS_ENABLED":"true","NODE_ENV":"production"}'
+#     Re-deploying new code? Swap `create-microvm-image` for `update-microvm-image
+#     --image-identifier "$IMG"` (same other args) to add a version.
+
+# 2c. Poll until the version is SUCCESSFUL, then mark it ACTIVE so RunMicrovm
+#     resolves it without an explicit version. (First build is version 1.0.)
+IMG="arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:microvm-image:asteroids"
+aws lambda-microvms get-microvm-image-version --region "$AWS_REGION" \
+  --image-identifier "$IMG" --image-version 1.0 --query 'state' --output text   # repeat until SUCCESSFUL
+aws lambda-microvms update-microvm-image-version --region "$AWS_REGION" \
+  --image-identifier "$IMG" --image-version 1.0 --status ACTIVE
 
 # 3. Create a host login in Cognito (interactive password prompt — real terminal).
 npm run cli --workspace @game/cli -- create-user alice
@@ -163,7 +189,7 @@ the disconnect count as a death / last-standing elimination.)
 
 | Command | Purpose |
 |---|---|
-| `build-image` | Bundle, upload, build the MicroVM image → ACTIVE |
+| `bundle-image` | Local prep: esbuild bundle + zip + upload artifact to S3 (prints the s3:// URI). The image itself is built with `aws lambda-microvms create-microvm-image` — see Deploy. |
 | `create-user <name> [password]` | Create a host user in Cognito (prompts for password if omitted) |
 | `list-users` | List host users (Cognito) |
 | `delete-user <name>` | Delete a host user (Cognito) |
