@@ -10,6 +10,36 @@ real-time, WebSocket workloads — with a serverless control plane in front.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    subgraph Browser
+        H["Host<br/>(canvas client)"]
+        G["Guest<br/>(canvas client)"]
+    end
+
+    subgraph CP["Control plane (serverless)"]
+        CF["CloudFront + S3<br/>(static client)"]
+        API["API Gateway<br/>HTTP API"]
+        L["Lambda router<br/>login · rooms · tokens"]
+        DB[("DynamoDB<br/>rooms")]
+        COG["Cognito<br/>(host accounts)"]
+    end
+
+    subgraph DP["Data plane — one MicroVM per room"]
+        VM["Firecracker MicroVM<br/>:8080 ws game server (30Hz sim)<br/>:9000 lifecycle hooks"]
+    end
+
+    H -- "1. load app" --> CF
+    H -- "2. login / create room (REST)" --> API
+    G -- "join via link (REST)" --> API
+    API --> L
+    L <--> DB
+    L -- "verify host token" --> COG
+    L -- "RunMicrovm · Suspend/Resume · Terminate<br/>· mint scoped auth token" --> VM
+    H -- "3. gameplay WSS (direct, auth via subprotocol)" --> VM
+    G -- "gameplay WSS (direct)" --> VM
+```
+
 Two planes that never mix:
 
 - **Control plane** (`packages/control-plane`, `packages/infra`) — Lambda + API
