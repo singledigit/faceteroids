@@ -87,7 +87,10 @@ function startGame(cfg: PlayConfig): void {
     if (status === 'SUSPENDED') {
       paused = true;
       showPausedOverlay();
-      pollUntilRunning();
+      // The host resumes manually via the Pause/Resume button, so it must NOT
+      // also poll — that would race the manual connect() and create duplicate,
+      // mutually-superseding sockets. Guests have no button, so they poll.
+      if (!cfg.isHost) pollUntilRunning();
       return;
     }
     setStatus('Disconnected. Reconnecting…', () => setTimeout(connect, 1500));
@@ -142,12 +145,18 @@ function startGame(cfg: PlayConfig): void {
           buffer.push(msg.snapshot, performance.now());
           updateHud(msg.snapshot.phase);
         } else if (msg.t === 'bye') {
-          // Terminal: the room is gone or we're not allowed. Don't auto-reconnect,
-          // and drop the stale session so a refresh returns to the lobby.
-          ended = true;
-          sampler.stop();
-          clearSession();
-          setStatus(`Disconnected: ${msg.reason}`);
+          // 'superseded' means a newer connection of OURS (e.g. a manual resume)
+          // took over — not terminal, so let that connection proceed and ignore
+          // this close. Everything else (room-full, room-not-ready, etc.) is
+          // terminal: stop and drop the stale session.
+          if (msg.reason === 'superseded') {
+            sampler.stop();
+          } else {
+            ended = true;
+            sampler.stop();
+            clearSession();
+            setStatus(`Disconnected: ${msg.reason}`);
+          }
         }
       },
     });
