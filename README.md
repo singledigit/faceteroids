@@ -121,10 +121,13 @@ Open `AsteroidsApi.WebUrl` in a browser:
 > the same static build works regardless of the API URL.
 
 **Refresh-safe:** the client persists a per-tab session (`sessionStorage`), so a
-browser refresh reconnects to the same room with the same identity — the host
-stays host, a guest keeps its ship and score. The short-lived WS token isn't
-stored; it's re-minted on resume via `/tokens/{roomId}/refresh`. If the room has
-since closed, the client falls back to the lobby.
+browser refresh reconnects to the same room with the same identity. The server
+holds a disconnected player's ship intact for a short grace window (10s), so a
+refresh resumes the **same ship at the same spot** — no death, no respawn — and
+keeps score/lives. The short-lived WS token isn't stored; it's re-minted on
+resume via `/tokens/{roomId}/refresh`. If the room has since closed, the client
+falls back to the lobby. (Only if a player doesn't return within the window does
+the disconnect count as a death / last-standing elimination.)
 
 ### Admin CLI (`game-admin`)
 

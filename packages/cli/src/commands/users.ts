@@ -19,14 +19,21 @@ async function poolId(): Promise<string> {
   return stackOutput(API_STACK, 'UserPoolId');
 }
 
-export async function createUser(username?: string): Promise<void> {
-  if (!username) throw new Error('usage: create-user <username>');
+export async function createUser(username?: string, passwordArg?: string): Promise<void> {
+  if (!username) throw new Error('usage: create-user <username> [password]');
   const UserPoolId = await poolId();
 
-  const password = await promptPassword(`Password for ${username}: `);
+  // Password may be passed as an argument (handy for scripts / non-TTY shells) or
+  // entered interactively (no echo). The interactive path confirms by retyping.
+  let password: string;
+  if (passwordArg !== undefined) {
+    password = passwordArg;
+  } else {
+    password = await promptPassword(`Password for ${username}: `);
+    const confirm = await promptPassword('Confirm password: ');
+    if (password !== confirm) throw new Error('passwords do not match');
+  }
   if (password.length < 8) throw new Error('password must be at least 8 characters');
-  const confirm = await promptPassword('Confirm password: ');
-  if (password !== confirm) throw new Error('passwords do not match');
 
   try {
     // Create with no invite email/SMS, then set a permanent password so the user

@@ -45,7 +45,19 @@ interface Player {
   lastFireAt: number;
   respawnAt: number | null;
   connected: boolean;
+  /** Server time (ms) the player disconnected, or null if connected. */
+  disconnectedAt: number | null;
 }
+
+/**
+ * Grace window after a disconnect. Within it, the player's ship is hidden and
+ * neutral (can't be hit, can't act) but its full state is preserved, so a browser
+ * refresh resumes the SAME ship at the SAME position. Only past this window does
+ * the disconnect count as a real death/elimination.
+ */
+const DISCONNECT_GRACE_MS = 10_000;
+/** Brief invulnerability granted on resume so you can't die on the frame you return. */
+const RESUME_INVULN_MS = 1500;
 
 export interface SimEvent {
   kind: GameEventKind;
@@ -92,15 +104,26 @@ export class World {
   addPlayer(id: string, name: string): void {
     let p = this.players.get(id);
     if (p) {
-      // Reconnect (e.g. browser refresh): keep score/lives, mark connected.
+      // Reconnect (e.g. browser refresh).
+      const wasGraced = p.disconnectedAt !== null;
       p.connected = true;
+      p.disconnectedAt = null;
       p.name = name;
-      // Disconnect left the ship dead. If the round is live and the player still
-      // has lives, give them a fresh ship (preserving score/lives via spawnShip)
-      // so they rejoin the action. Permanently-eliminated players stay out.
-      const lives = p.ship?.lives ?? this.ruleset.lives;
-      if (this.phase === 'playing' && !p.ship?.alive && (this.ruleset.respawn || lives > 0)) {
-        this.spawnShip(p);
+      // The fresh client restarts its input sequence at 0. Reset the server's
+      // high-water mark so those frames aren't rejected as stale — otherwise the
+      // player can't steer until seq climbs back past the pre-refresh value,
+      // which at 60Hz can take many seconds (the "respawned but frozen" bug).
+      p.input = { seq: 0, thrust: false, rotate: 0, fire: false };
+      p.lastProcessedSeq = 0;
+
+      if (this.phase === 'playing' && p.ship?.alive) {
+        // Resumed within the grace window: same ship, same spot. Grant a brief
+        // invuln so you can't be killed on the frame you return.
+        if (wasGraced) p.ship.spawnInvulnUntil = this.now() + RESUME_INVULN_MS;
+      } else if (this.phase === 'playing' && !p.ship?.alive) {
+        // Came back after the ship had truly died — respawn if lives remain.
+        const lives = p.ship?.lives ?? this.ruleset.lives;
+        if (this.ruleset.respawn || lives > 0) this.spawnShip(p);
       }
       return;
     }
@@ -111,6 +134,7 @@ export class World {
       input: { seq: 0, thrust: false, rotate: 0, fire: false },
       lastProcessedSeq: 0,
       lastFireAt: 0,
+      disconnectedAt: null,
       respawnAt: null,
       connected: true,
     };
@@ -134,11 +158,12 @@ export class World {
     const p = this.players.get(id);
     if (!p) return;
     p.connected = false;
-    // Keep the (now-dead) ship so a reconnect can restore score/lives; just take
-    // it out of play. Nulling it would lose the player's progress on refresh.
-    if (p.ship) p.ship.alive = false;
-    // In last-standing, a disconnect counts as elimination; re-check the round.
-    if (this.ruleset.lastAliveWins) this.checkLastStanding();
+    p.disconnectedAt = this.now();
+    // Don't kill the ship yet — keep it intact during the grace window so a quick
+    // refresh resumes the same ship. It's neutralized in the step loop (no input,
+    // can't collide) and only converted to a real death if the window elapses.
+    // Note: last-standing elimination is deferred to expiry, so a refresh doesn't
+    // instantly hand the win to someone else.
   }
 
   setInput(id: string, input: PlayerInput): void {
@@ -195,6 +220,7 @@ export class World {
     const now = this.now();
 
     if (this.phase === 'playing') {
+      this.expireDisconnects(now);
       this.integrateShips(dt, now);
       this.integrateBullets(dt, now);
       this.integrateAsteroids(dt);
@@ -204,10 +230,29 @@ export class World {
     }
   }
 
+  /** Convert disconnects that outlast the grace window into real deaths. */
+  private expireDisconnects(now: number): void {
+    for (const p of this.players.values()) {
+      if (p.disconnectedAt === null) continue;
+      if (now - p.disconnectedAt < DISCONNECT_GRACE_MS) continue;
+      // Grace elapsed: the player isn't coming back. Kill the ship for good and,
+      // in last-standing, re-check whether the round is now decided.
+      p.disconnectedAt = null;
+      if (p.ship) p.ship.alive = false;
+      if (this.ruleset.lastAliveWins) this.checkLastStanding();
+    }
+  }
+
   private integrateShips(dt: number, now: number): void {
     for (const p of this.players.values()) {
       const s = p.ship;
       if (!s || !s.alive) continue;
+      // Ship is in the disconnect grace window: freeze it in place (no input,
+      // no drift, no firing) until the owner returns or the window expires.
+      if (p.disconnectedAt !== null) {
+        s.thrusting = false;
+        continue;
+      }
       const inp = p.input;
       p.lastProcessedSeq = inp.seq;
 
@@ -285,7 +330,9 @@ export class World {
     // Ship <-> asteroid, and (friendly fire) bullet/ship <-> ship.
     for (const p of this.players.values()) {
       const s = p.ship;
-      if (!s || !s.alive || now < s.spawnInvulnUntil) continue;
+      // Skip dead ships, spawn-invulnerable ships, and ships whose owner is in the
+      // disconnect grace window (frozen and untouchable until they return).
+      if (!s || !s.alive || p.disconnectedAt !== null || now < s.spawnInvulnUntil) continue;
 
       for (const a of this.asteroids) {
         const r = asteroidRadius(a.size) + SHIP_RADIUS;
@@ -370,8 +417,14 @@ export class World {
 
   private checkLastStanding(): void {
     if (!this.ruleset.lastAliveWins || this.phase !== 'playing') return;
+    // A player inside the disconnect grace window still counts as a contender —
+    // a refresh must not instantly hand someone else the win. Their elimination
+    // (if they don't return) is re-checked when the grace window expires.
     const contenders = [...this.players.values()].filter(
-      (p) => p.connected && p.ship && (p.ship.alive || p.ship.lives > 0),
+      (p) =>
+        (p.connected || p.disconnectedAt !== null) &&
+        p.ship &&
+        (p.ship.alive || p.ship.lives > 0),
     );
     if (contenders.length <= 1 && this.players.size > 1) {
       this.phase = 'roundOver';

@@ -24,6 +24,8 @@ interface Conn {
   playerId: string | null;
   /** True only if this connection proved host authority via the room's secret. */
   isHost: boolean;
+  /** Set when a newer connection for the same playerId has taken over. */
+  superseded: boolean;
 }
 
 export class GameServer {
@@ -36,6 +38,8 @@ export class GameServer {
   private loop: GameLoop | null = null;
   private run: RunState | null = null;
   private readonly conns = new Set<Conn>();
+  /** The current live connection per playerId (for refresh/reconnect handover). */
+  private readonly byPlayer = new Map<string, Conn>();
 
   /** Start accepting connections. Safe to call before run state exists. */
   listen(port: number): void {
@@ -82,7 +86,7 @@ export class GameServer {
   }
 
   private onConnection(ws: WebSocket): void {
-    const conn: Conn = { ws, playerId: null, isHost: false };
+    const conn: Conn = { ws, playerId: null, isHost: false, superseded: false };
     this.conns.add(conn);
 
     ws.on('message', (raw) => {
@@ -126,6 +130,17 @@ export class GameServer {
         }
         conn.playerId = conn.isHost ? 'host' : msg.playerId;
 
+        // Handover: if this player already has a live connection (a refresh
+        // racing the old socket's close), retire the old one without evicting the
+        // player, so its later 'close' won't remove the freshly-reconnected ship.
+        const prior = this.byPlayer.get(conn.playerId);
+        if (prior && prior !== conn) {
+          prior.superseded = true;
+          this.send(prior.ws, { t: 'bye', reason: 'superseded' });
+          prior.ws.close();
+        }
+        this.byPlayer.set(conn.playerId, conn);
+
         this.world.addPlayer(conn.playerId, msg.name.slice(0, 24) || 'Player');
         this.send(ws, {
           t: 'welcome',
@@ -155,7 +170,12 @@ export class GameServer {
 
     ws.on('close', () => {
       this.conns.delete(conn);
-      if (conn.playerId) this.world?.removePlayer(conn.playerId);
+      // A superseded socket (replaced by a reconnect) must not evict the player.
+      if (conn.superseded) return;
+      if (conn.playerId && this.byPlayer.get(conn.playerId) === conn) {
+        this.byPlayer.delete(conn.playerId);
+        this.world?.removePlayer(conn.playerId);
+      }
     });
     ws.on('error', () => ws.close());
   }

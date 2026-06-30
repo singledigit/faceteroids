@@ -334,7 +334,9 @@ function showLobby(flow: 'host' | 'guest' | 'local'): void {
 // a guest keeps their guestId, so the server treats it as a reconnect and their
 // ship/score persist. If the room is gone, drop the session and fall back.
 async function resumeFlow(s: Session, fallback: () => void): Promise<void> {
-  showLobby(s.kind === 'host' ? 'host' : 'guest');
+  // Keep the lobby (and its login box) HIDDEN during resume so the host doesn't
+  // see the login screen flash. Show only a neutral reconnecting overlay.
+  $('lobby').style.display = 'none';
   setStatus('Reconnecting to your game…');
   try {
     const status = await api.getRoomStatus(s.roomId);

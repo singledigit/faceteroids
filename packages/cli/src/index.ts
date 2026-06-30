@@ -13,7 +13,7 @@ function usage(): never {
 
   build-image                 Bundle, upload, and build the MicroVM image (-> ACTIVE)
   set-secret   [value]        Set the JWT signing secret in SSM (random if omitted)
-  create-user  <username>     Create a host user (prompts for password)
+  create-user  <username> [password]  Create a host user (prompts if password omitted)
   list-users                  List host usernames
   delete-user  <username>     Delete a host user
   run-room     [mode]         Manually RunMicrovm + mint a token (data-plane test)
@@ -32,7 +32,7 @@ async function main(): Promise<void> {
       await setSecret(args[0]);
       break;
     case 'create-user':
-      await createUser(args[0]);
+      await createUser(args[0], args[1]);
       break;
     case 'list-users':
       await listUsers();

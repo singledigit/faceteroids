@@ -123,39 +123,69 @@ test('playerCount tracks connect/disconnect', () => {
   assert.equal(world.playerCount(), 1);
 });
 
-test('reconnect (refresh) preserves score and re-spawns a live ship', () => {
+test('reconnect within grace resumes the SAME ship (pos + score preserved)', () => {
   const { world } = makeWorld('ffa');
   world.addPlayer('g1', 'Ana');
   world.start();
-  // Give the player a score, then snapshot it.
   const ship = world.snapshot().ships.find((s) => s.playerId === 'g1')!;
   ship.score = 42;
-  const before = world.snapshot().scoreboard.find((e) => e.playerId === 'g1')!;
-  assert.equal(before.score, 42);
+  const pos = { x: ship.pos.x, y: ship.pos.y };
 
-  // Disconnect (close tab) then reconnect with the SAME id (refresh).
+  // Disconnect (refresh) then reconnect with the SAME id, within the grace window.
   world.removePlayer('g1');
-  assert.equal(world.playerCount(), 0);
+  assert.equal(world.playerCount(), 0, 'not counted while away');
   world.addPlayer('g1', 'Ana');
 
   assert.equal(world.playerCount(), 1, 'counted as connected again');
   const after = world.snapshot();
-  const entry = after.scoreboard.find((e) => e.playerId === 'g1')!;
-  assert.equal(entry.score, 42, 'score survived the reconnect');
-  const reship = after.ships.find((s) => s.playerId === 'g1');
-  assert.ok(reship?.alive, 're-spawned a live ship to rejoin the round');
+  assert.equal(after.scoreboard.find((e) => e.playerId === 'g1')!.score, 42, 'score kept');
+  const reship = after.ships.find((s) => s.playerId === 'g1')!;
+  assert.ok(reship.alive, 'same ship still alive (not a respawn)');
+  assert.equal(reship.pos.x, pos.x, 'same position x');
+  assert.equal(reship.pos.y, pos.y, 'same position y');
 });
 
-test('last-standing: round ends with a winner when one ship remains', () => {
+test('reconnect after the grace window respawns a fresh ship if lives remain', () => {
+  const { world, tick, advance } = makeWorld('ffa');
+  world.addPlayer('g1', 'Ana');
+  world.start();
+  world.removePlayer('g1');
+  advance(11_000); // outlast grace -> real death
+  tick(2);
+  world.addPlayer('g1', 'Ana');
+  const reship = world.snapshot().ships.find((s) => s.playerId === 'g1');
+  assert.ok(reship?.alive, 'ffa respawns the player on return');
+});
+
+test('last-standing: a disconnect within the grace window does NOT end the round', () => {
   const { world, tick, advance } = makeWorld('lastStanding');
   world.addPlayer('host', 'Host');
   world.addPlayer('guest', 'Guest');
   world.start();
   assert.equal(world.snapshot().phase, 'playing');
 
-  // Guest leaves; with only the host left, the round should resolve.
+  // Guest's socket drops (e.g. refresh). During the grace window they remain a
+  // contender, so the round must NOT be handed to the host yet.
   world.removePlayer('guest');
-  advance(100);
+  advance(1000);
+  tick(2);
+  assert.equal(world.snapshot().phase, 'playing', 'still playing during grace');
+
+  // If the guest comes back in time, they resume and the round continues.
+  world.addPlayer('guest', 'Guest');
+  advance(1000);
+  tick(2);
+  assert.equal(world.snapshot().phase, 'playing', 'resumed; round continues');
+});
+
+test('last-standing: round ends once a disconnect outlasts the grace window', () => {
+  const { world, tick, advance } = makeWorld('lastStanding');
+  world.addPlayer('host', 'Host');
+  world.addPlayer('guest', 'Guest');
+  world.start();
+
+  world.removePlayer('guest');
+  advance(11_000); // past the 10s disconnect grace window
   tick(2);
   const snap = world.snapshot();
   assert.equal(snap.phase, 'roundOver');
