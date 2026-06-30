@@ -2,17 +2,24 @@
 // least-privilege role the Lambda needs to run rooms, mint tokens, terminate VMs,
 // and touch DynamoDB — and the S3+CloudFront hosting for the static web client.
 //
-// The JWT signing secret is NOT created here: an SSM SecureString cannot be
-// created with a real encrypted value through CloudFormation, so we'd only ever
-// bake a plaintext placeholder into the template. Instead it is set out-of-band
-// (`game-admin set-secret`) and merely referenced + granted-read here.
+// Auth is not hand-rolled: a Cognito user pool backs host accounts, and host
+// routes are protected by an API Gateway Cognito JWT authorizer (verification
+// happens at the edge). Guests are anonymous and authorized by an opaque,
+// DynamoDB-backed session token inside the Lambda — no signing secret anywhere.
 
 import { Stack, type StackProps, CfnOutput, Duration, RemovalPolicy, Arn, ArnFormat } from 'aws-cdk-lib';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { HttpApi, HttpMethod, CorsHttpMethod, CfnStage } from 'aws-cdk-lib/aws-apigatewayv2';
+import {
+  HttpApi,
+  HttpMethod,
+  CorsHttpMethod,
+  CfnStage,
+  type IHttpRouteAuthorizer,
+} from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { HttpUserPoolAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { PolicyStatement, Effect, type IRole } from 'aws-cdk-lib/aws-iam';
 import {
   UserPool,
@@ -32,7 +39,7 @@ import type { Table } from 'aws-cdk-lib/aws-dynamodb';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { Construct } from 'constructs';
-import { JWT_SECRET_PARAM, MICROVM_IMAGE_NAME } from './config.js';
+import { MICROVM_IMAGE_NAME } from './config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONTROL_PLANE_ENTRY = join(
@@ -102,12 +109,12 @@ export class ApiStack extends Stack {
       readAttributes: new ClientAttributes().withStandardAttributes({}),
     });
 
-    // Reference (don't create) the guest-token signing secret — set out-of-band
-    // via `game-admin set-secret`. Used ONLY for ephemeral guest JWTs (HS256);
-    // host tokens are Cognito-issued (RS256). We only grant the Lambda read.
-    const jwtSecretArn = Arn.format(
-      { service: 'ssm', resource: 'parameter', resourceName: JWT_SECRET_PARAM.replace(/^\//, '') },
-      this,
+    // Cognito JWT authorizer — verifies host ID tokens at the API Gateway edge,
+    // so host routes never reach the Lambda with an unverified token.
+    const hostAuthorizer: IHttpRouteAuthorizer = new HttpUserPoolAuthorizer(
+      'HostAuthorizer',
+      userPool,
+      { userPoolClients: [userPoolClient] },
     );
 
     // Explicit log group with bounded retention (the implicit one never expires).
@@ -140,7 +147,6 @@ export class ApiStack extends Stack {
         // the IAM trust-policy SourceArn uses the slash form.
         MICROVM_IMAGE_ARN: this.microvmArn('microvm-image', MICROVM_IMAGE_NAME),
         EXECUTION_ROLE_ARN: props.executionRole.roleArn,
-        JWT_SECRET_PARAM,
         WEB_BASE_URL: webBaseUrl,
         COGNITO_USER_POOL_ID: userPool.userPoolId,
         COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
@@ -149,21 +155,13 @@ export class ApiStack extends Stack {
 
     // --- Permissions (least privilege) ---
     props.table.grantReadWriteData(fn);
-    // Authenticate hosts against Cognito (admin auth flow).
+    // Log hosts in against Cognito (admin auth flow). Token verification on later
+    // requests is done by the API Gateway authorizer, not the Lambda.
     fn.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
         actions: ['cognito-idp:AdminInitiateAuth'],
         resources: [userPool.userPoolArn],
-      }),
-    );
-    // Read + decrypt the JWT secret (SecureString uses the SSM-managed KMS key,
-    // whose decrypt is implicit for the parameter owner).
-    fn.addToRolePolicy(
-      new PolicyStatement({
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [jwtSecretArn],
       }),
     );
 
@@ -226,18 +224,28 @@ export class ApiStack extends Stack {
       },
     });
 
-    const routes: Array<[string, HttpMethod]> = [
+    // Public routes — no edge authorizer (login itself, plus the anonymous-guest
+    // join / status / token-refresh, which are authorized in-Lambda).
+    const publicRoutes: Array<[string, HttpMethod]> = [
       ['/auth/login', HttpMethod.POST],
-      ['/rooms', HttpMethod.POST],
       ['/rooms/{roomId}', HttpMethod.GET],
       ['/rooms/{roomId}/join', HttpMethod.POST],
+      ['/tokens/{roomId}/refresh', HttpMethod.POST],
+    ];
+    for (const [path, method] of publicRoutes) {
+      api.addRoutes({ path, methods: [method], integration });
+    }
+
+    // Host-only routes — gated by the Cognito JWT authorizer at the edge.
+    const hostRoutes: Array<[string, HttpMethod]> = [
+      ['/rooms', HttpMethod.POST],
       ['/rooms/{roomId}/close', HttpMethod.POST],
       ['/rooms/{roomId}/suspend', HttpMethod.POST],
       ['/rooms/{roomId}/resume', HttpMethod.POST],
-      ['/tokens/{roomId}/refresh', HttpMethod.POST],
+      ['/rooms/{roomId}/token', HttpMethod.POST],
     ];
-    for (const [path, method] of routes) {
-      api.addRoutes({ path, methods: [method], integration });
+    for (const [path, method] of hostRoutes) {
+      api.addRoutes({ path, methods: [method], integration, authorizer: hostAuthorizer });
     }
 
     // Throttle the default stage to blunt brute-force / abuse on /auth/login.

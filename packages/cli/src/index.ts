@@ -5,14 +5,12 @@
 import { buildImage } from './commands/buildImage.js';
 import { runRoom } from './commands/runRoom.js';
 import { createUser, deleteUser, listUsers } from './commands/users.js';
-import { setSecret } from './commands/secret.js';
 import { pruneImages } from './commands/pruneImages.js';
 
 function usage(): never {
   console.log(`game-admin <command>
 
   build-image                 Bundle, upload, and build the MicroVM image (-> ACTIVE)
-  set-secret   [value]        Set the guest-token signing secret in SSM (random if omitted)
   create-user  <username> [password]  Create a host user (prompts if password omitted)
   list-users                  List host usernames
   delete-user  <username>     Delete a host user
@@ -27,9 +25,6 @@ async function main(): Promise<void> {
   switch (cmd) {
     case 'build-image':
       await buildImage();
-      break;
-    case 'set-secret':
-      await setSecret(args[0]);
       break;
     case 'create-user':
       await createUser(args[0], args[1]);

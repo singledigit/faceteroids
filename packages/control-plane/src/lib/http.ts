@@ -1,13 +1,17 @@
 // Helpers for API Gateway HTTP API (v2) Lambda handlers: JSON responses with CORS,
-// body parsing, and bearer-token extraction + verification into typed claims.
+// body parsing, and identity extraction.
+//
+// Auth is NOT hand-rolled here. Hosts are authenticated by an API Gateway Cognito
+// JWT authorizer at the edge — by the time a host route's Lambda runs, the token
+// is already verified and the claims are on the event. Guests present an opaque
+// session token that we look up in DynamoDB.
 
 import type {
+  APIGatewayProxyEventV2WithJWTAuthorizer,
   APIGatewayProxyEventV2,
   APIGatewayProxyResultV2,
 } from 'aws-lambda';
-import type { Claims } from '@game/shared';
-import { verifyGuest } from './jwt.js';
-import { verifyHostToken } from './cognito.js';
+import { getGuestSession, type GuestSession } from './ddb.js';
 
 const CORS = {
   'access-control-allow-origin': '*',
@@ -48,16 +52,30 @@ export function parseBody<T>(event: APIGatewayProxyEventV2): T | null {
   }
 }
 
+export interface HostIdentity {
+  /** Cognito sub (stable user id). */
+  sub: string;
+  username: string;
+}
+
 /**
- * Extract and verify the Bearer token. Two issuers: hosts present a Cognito ID
- * token (RS256, verified against the pool JWKS); guests present our own ephemeral
- * HS256 token. We try host first, then guest.
+ * Identity of the host on a route protected by the API Gateway Cognito authorizer.
+ * The token is already verified at the edge; we just read the claims. Returns null
+ * only if somehow invoked without the authorizer (defensive).
  */
-export async function authClaims(event: APIGatewayProxyEventV2): Promise<Claims | null> {
+export function hostIdentity(event: APIGatewayProxyEventV2WithJWTAuthorizer): HostIdentity | null {
+  const claims = event.requestContext.authorizer?.jwt?.claims as
+    | Record<string, string>
+    | undefined;
+  if (!claims?.sub) return null;
+  return { sub: claims.sub, username: claims['cognito:username'] ?? claims.sub };
+}
+
+/** Look up the guest's opaque session token (Authorization: Bearer <token>). */
+export async function guestSession(event: APIGatewayProxyEventV2): Promise<GuestSession | null> {
   const header = event.headers?.authorization ?? event.headers?.Authorization;
   if (!header?.startsWith('Bearer ')) return null;
-  const token = header.slice(7);
-  return (await verifyHostToken(token)) ?? (await verifyGuest(token));
+  return getGuestSession(header.slice(7));
 }
 
 export function pathParam(event: APIGatewayProxyEventV2, name: string): string | undefined {

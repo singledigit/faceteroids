@@ -53,8 +53,12 @@ export interface JoinRoomRequest {
 export interface JoinRoomResponse extends RoomConnectionInfo {
   guestId: string;
   displayName: string;
-  /** Room-scoped JWT used to authorize this guest's refresh/status calls. */
-  guestJwt: string;
+  /**
+   * Opaque, room-scoped session token (NOT a JWT). The control plane stores the
+   * {token -> room, guest} binding in DynamoDB, so it's revocable and needs no
+   * signing secret. Sent on the guest's later refresh/status calls.
+   */
+  guestToken: string;
 }
 
 export interface RefreshTokenResponse {

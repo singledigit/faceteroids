@@ -62,8 +62,14 @@ export function joinRoom(roomId: string, displayName: string): Promise<JoinRoomR
   return req(`/rooms/${roomId}/join`, { method: 'POST', body: JSON.stringify({ displayName }) });
 }
 
-export function refreshToken(roomId: string, token: string): Promise<RefreshTokenResponse> {
-  return req(`/tokens/${roomId}/refresh`, { method: 'POST', token });
+/** Guest: refresh the gameplay WS token using the opaque guest session token. */
+export function refreshGuestToken(roomId: string, guestToken: string): Promise<RefreshTokenResponse> {
+  return req(`/tokens/${roomId}/refresh`, { method: 'POST', token: guestToken });
+}
+
+/** Host: refresh the gameplay WS token (Cognito-authorized at the edge). */
+export function refreshHostToken(roomId: string, hostToken: string): Promise<RefreshTokenResponse> {
+  return req(`/rooms/${roomId}/token`, { method: 'POST', token: hostToken });
 }
 
 export function closeRoom(roomId: string, token: string): Promise<void> {

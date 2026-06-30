@@ -1,6 +1,6 @@
 // DynamoDB single-table access. Item shapes:
-//   Room  PK=ROOM#<roomId>    SK=META
-//   Guest PK=ROOM#<roomId>    SK=GUEST#<guestId>
+//   Room          PK=ROOM#<roomId>          SK=META
+//   Guest session PK=GUESTSESSION#<token>   SK=SESSION
 // (Host accounts live in Cognito, not here.)
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
@@ -77,6 +77,60 @@ export async function adjustPlayerCount(roomId: string, delta: number): Promise<
     }),
   );
   return (res.Attributes?.playerCount as number | undefined) ?? 0;
+}
+
+// ---- Guest sessions ----
+// Guests are anonymous, so instead of a signed token we issue a random opaque
+// token and keep the binding server-side. This needs no signing secret, is
+// revocable (delete the row), and auto-expires via the table's TTL — the
+// textbook server-side session, and a cleaner foundation to scale than a
+// hand-rolled JWT.
+
+export interface GuestSession {
+  PK: string;
+  SK: 'SESSION';
+  guestId: string;
+  roomId: string;
+  displayName: string;
+  createdAt: number;
+  expiresAt: number; // TTL (epoch seconds)
+}
+
+const guestPK = (token: string) => `GUESTSESSION#${token}`;
+
+export async function createGuestSession(
+  token: string,
+  guestId: string,
+  roomId: string,
+  displayName: string,
+  ttlSeconds: number,
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await doc.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        PK: guestPK(token),
+        SK: 'SESSION',
+        guestId,
+        roomId,
+        displayName,
+        createdAt: now,
+        expiresAt: now + ttlSeconds,
+      } satisfies GuestSession,
+    }),
+  );
+}
+
+export async function getGuestSession(token: string): Promise<GuestSession | null> {
+  const res = await doc.send(
+    new GetCommand({ TableName: TABLE_NAME, Key: { PK: guestPK(token), SK: 'SESSION' } }),
+  );
+  const item = res.Item as GuestSession | undefined;
+  // Defensive: honor TTL immediately even if DynamoDB hasn't reaped the row yet
+  // (TTL deletion can lag by minutes).
+  if (item && item.expiresAt * 1000 <= Date.now()) return null;
+  return item ?? null;
 }
 
 export { roomPK };

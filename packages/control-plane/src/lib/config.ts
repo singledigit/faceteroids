@@ -13,9 +13,8 @@ export const REGION = process.env.AWS_REGION ?? 'us-west-2';
 export const TABLE_NAME = required('TABLE_NAME');
 export const MICROVM_IMAGE_ARN = required('MICROVM_IMAGE_ARN');
 export const EXECUTION_ROLE_ARN = required('EXECUTION_ROLE_ARN');
-// Guest-token signing secret (HS256). Host tokens are Cognito-issued (RS256).
-export const JWT_SECRET_PARAM = process.env.JWT_SECRET_PARAM ?? '/asteroids/jwt-secret';
-// Cognito host identity pool (self-registration disabled).
+// Cognito host pool (self-registration disabled). Host tokens are verified at the
+// API Gateway edge by a JWT authorizer; the Lambda only calls Cognito to log in.
 export const COGNITO_USER_POOL_ID = required('COGNITO_USER_POOL_ID');
 export const COGNITO_CLIENT_ID = required('COGNITO_CLIENT_ID');
 /** Base URL of the static web client, used to build shareable join links. */
@@ -26,3 +25,5 @@ export const GAME_PORT = 8080;
 export const ROOM_MAX_DURATION_SECONDS = 28800;
 /** WS auth token TTL (platform max is 60 min). */
 export const WS_TOKEN_TTL_MINUTES = 60;
+/** Guest session lifetime — matches the room's max lifetime; TTL auto-cleans. */
+export const GUEST_SESSION_TTL_SECONDS = ROOM_MAX_DURATION_SECONDS;

@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
+import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   MAX_PLAYERS_PER_ROOM,
   isGameMode,
   type CreateRoomRequest,
   type CreateRoomResponse,
 } from '@game/shared';
-import { isHost } from '@game/shared';
-import { authClaims, badRequest, forbidden, ok, parseBody } from '../lib/http.js';
+import { badRequest, forbidden, hostIdentity, ok, parseBody } from '../lib/http.js';
 import { putRoom } from '../lib/ddb.js';
 import { mintWsToken, runRoomVm } from '../lib/microvm.js';
 import { ROOM_MAX_DURATION_SECONDS, WEB_BASE_URL } from '../lib/config.js';
@@ -16,11 +15,12 @@ import { ROOM_MAX_DURATION_SECONDS, WEB_BASE_URL } from '../lib/config.js';
 // mint the host's first gameplay token, and return a shareable join URL. The VM
 // boots asynchronously — status starts at STARTING and the client polls
 // GET /rooms/{id} (or simply retries the WS connect) until it's reachable.
+// Authenticated at the edge by the Cognito JWT authorizer.
 export async function roomsCreate(
-  event: APIGatewayProxyEventV2,
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyResultV2> {
-  const claims = await authClaims(event);
-  if (!claims || !isHost(claims)) return forbidden('host login required');
+  const host = hostIdentity(event);
+  if (!host) return forbidden('host login required');
 
   const body = parseBody<CreateRoomRequest>(event);
   if (!body || !isGameMode(body.mode)) return badRequest('valid mode required');
@@ -40,7 +40,7 @@ export async function roomsCreate(
     microvmId,
     endpoint,
     mode: body.mode,
-    host: claims.sub,
+    host: host.sub,
     status: 'STARTING',
     playerCount: 0,
     maxPlayers: MAX_PLAYERS_PER_ROOM,

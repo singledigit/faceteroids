@@ -308,7 +308,7 @@ function guestFlow(roomId: string): void {
       setStatus('Joining room…');
       const join = await api.joinRoom(roomId, name);
       $('status').style.display = 'none';
-      const refresher = new TokenRefresher(roomId, join.guestJwt);
+      const refresher = new TokenRefresher(() => api.refreshGuestToken(roomId, join.guestToken));
       startGame({
         endpoint: join.endpoint,
         wsToken: join.wsToken,
@@ -322,7 +322,7 @@ function guestFlow(roomId: string): void {
           mode: join.mode,
           name,
           guestId: join.guestId,
-          guestJwt: join.guestJwt,
+          guestToken: join.guestToken,
         },
       });
     } catch (err) {
@@ -422,7 +422,7 @@ function showCreateScreen(token: string, username?: string): void {
       await waitForRoom(room.roomId);
       $('status').style.display = 'none';
       showShareLink(room.joinUrl);
-      const refresher = new TokenRefresher(room.roomId, token);
+      const refresher = new TokenRefresher(() => api.refreshHostToken(room.roomId, token));
       startGame({
         endpoint: room.endpoint,
         wsToken: room.wsToken,
@@ -522,11 +522,14 @@ async function resumeFlow(s: Session, fallback: () => void): Promise<void> {
     if (status.status === 'CLOSED' || status.status === 'TERMINATED') {
       throw new Error('room closed');
     }
-    const authJwt = s.kind === 'host' ? s.hostToken : s.guestJwt;
-    const { wsToken } = await api.refreshToken(s.roomId, authJwt);
+    const refreshFn =
+      s.kind === 'host'
+        ? () => api.refreshHostToken(s.roomId, s.hostToken)
+        : () => api.refreshGuestToken(s.roomId, s.guestToken);
+    const { wsToken } = await refreshFn();
     $('status').style.display = 'none';
 
-    const refresher = new TokenRefresher(s.roomId, authJwt);
+    const refresher = new TokenRefresher(refreshFn);
     if (s.kind === 'host') {
       showShareLink(`${location.origin}/?room=${s.roomId}`);
       startGame({

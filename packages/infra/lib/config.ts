@@ -12,9 +12,6 @@ export const MICROVM_IMAGE_NAME = 'asteroids';
 
 export const STACK_PREFIX = 'Asteroids';
 
-/** SSM SecureString parameter holding the JWT signing secret. */
-export const JWT_SECRET_PARAM = '/asteroids/jwt-secret';
-
 /** Single-table DynamoDB name (also referenced by control-plane + CLI). */
 export const TABLE_NAME = 'AsteroidsGame';
 

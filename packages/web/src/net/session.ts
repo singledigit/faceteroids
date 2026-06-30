@@ -29,8 +29,8 @@ export interface HostSession extends BaseSession {
 export interface GuestSession extends BaseSession {
   kind: 'guest';
   guestId: string;
-  /** Room-scoped guest JWT (used to refresh the WS token). */
-  guestJwt: string;
+  /** Opaque room-scoped session token (used to refresh the WS token). */
+  guestToken: string;
 }
 
 export type Session = HostSession | GuestSession;

@@ -2,17 +2,16 @@
 // 60 min). The live WS survives expiry — auth is checked at upgrade — but any
 // reconnect needs a fresh token, so we always keep a non-expired one in hand.
 
-import { TOKEN_REFRESH_MARGIN_MS } from '@game/shared';
-import { refreshToken } from './api.js';
+import { TOKEN_REFRESH_MARGIN_MS, type RefreshTokenResponse } from '@game/shared';
+
+/** Mints a fresh WS token. Host and guest pass different implementations. */
+export type RefreshFn = () => Promise<RefreshTokenResponse>;
 
 export class TokenRefresher {
   private timer: number | null = null;
   private readonly subscribers: Array<(wsToken: string) => void> = [];
 
-  constructor(
-    private readonly roomId: string,
-    private readonly authJwt: string,
-  ) {}
+  constructor(private readonly refreshFn: RefreshFn) {}
 
   /** Register a callback invoked with each freshly minted WS token. */
   onToken(fn: (wsToken: string) => void): void {
@@ -28,7 +27,7 @@ export class TokenRefresher {
 
   private async refresh(): Promise<void> {
     try {
-      const res = await refreshToken(this.roomId, this.authJwt);
+      const res = await this.refreshFn();
       for (const fn of this.subscribers) fn(res.wsToken);
       this.schedule(res.wsTokenExpiresAt);
     } catch {

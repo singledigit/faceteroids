@@ -1,14 +1,16 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import type { JoinRoomRequest, JoinRoomResponse } from '@game/shared';
 import { badRequest, json, notFound, ok, parseBody, pathParam } from '../lib/http.js';
-import { adjustPlayerCount, getRoom } from '../lib/ddb.js';
+import { adjustPlayerCount, createGuestSession, getRoom } from '../lib/ddb.js';
 import { mintWsToken } from '../lib/microvm.js';
-import { signGuest } from '../lib/jwt.js';
+import { GUEST_SESSION_TTL_SECONDS } from '../lib/config.js';
 
-// Login-less guest join. Anyone with the link can join an open room. We mint a
-// gameplay token scoped to THIS room's VM + gameplay port only, and a room-scoped
-// guest JWT used solely to authorize this guest's later refresh/status calls.
+// Login-less guest join (intentionally unauthenticated — the share link IS the
+// invite). We mint a gameplay token scoped to THIS room's VM + gameplay port,
+// and create a server-side guest SESSION keyed by a random opaque token. That
+// token authorizes the guest's later refresh/status calls — no signing secret,
+// revocable, and TTL-reaped.
 export async function roomsJoin(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyResultV2> {
@@ -27,8 +29,9 @@ export async function roomsJoin(
   if (room.playerCount >= room.maxPlayers) return json(409, { error: 'room full' });
 
   const guestId = randomUUID();
+  const guestToken = randomBytes(32).toString('base64url'); // 256-bit opaque token
   const { wsToken, wsTokenExpiresAt } = await mintWsToken(room.microvmId);
-  const guestJwt = await signGuest(guestId, roomId);
+  await createGuestSession(guestToken, guestId, roomId, displayName, GUEST_SESSION_TTL_SECONDS);
   await adjustPlayerCount(roomId, 1);
 
   const res: JoinRoomResponse = {
@@ -39,7 +42,7 @@ export async function roomsJoin(
     wsTokenExpiresAt,
     guestId,
     displayName,
-    guestJwt,
+    guestToken,
   };
   return ok(res);
 }

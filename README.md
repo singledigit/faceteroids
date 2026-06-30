@@ -32,9 +32,9 @@ flowchart LR
     H -- "1. load app" --> CF
     H -- "2. login / create room (REST)" --> API
     G -- "join via link (REST)" --> API
+    API -- "host routes: verify JWT at edge" --> COG
     API --> L
     L <--> DB
-    L -- "verify host token" --> COG
     L -- "RunMicrovm · Suspend/Resume · Terminate<br/>· mint scoped auth token" --> VM
     H -- "3. gameplay WSS (direct, auth via subprotocol)" --> VM
     G -- "gameplay WSS (direct)" --> VM
@@ -131,15 +131,10 @@ npx vite build packages/web
 ( cd packages/infra && npx cdk deploy --all --require-approval never )
 #    Outputs: AsteroidsApi.ApiUrl and AsteroidsApi.WebUrl (the playable URL).
 
-# 2. Set the guest-token signing secret in SSM. Required (guest joins fail
-#    without it). It's a SecureString, which CloudFormation can't create with a
-#    real value, so it's set out-of-band here rather than by the CDK stack.
-npm run cli --workspace @game/cli -- set-secret
-
-# 3. Build + publish the MicroVM image (bundle -> S3 -> CreateMicrovmImage -> ACTIVE).
+# 2. Build + publish the MicroVM image (bundle -> S3 -> CreateMicrovmImage -> ACTIVE).
 npm run cli --workspace @game/cli -- build-image
 
-# 4. Create a host login in Cognito (interactive password prompt — real terminal).
+# 3. Create a host login in Cognito (interactive password prompt — real terminal).
 npm run cli --workspace @game/cli -- create-user alice
 ```
 
@@ -169,7 +164,6 @@ the disconnect count as a death / last-standing elimination.)
 | Command | Purpose |
 |---|---|
 | `build-image` | Bundle, upload, build the MicroVM image → ACTIVE |
-| `set-secret [value]` | Set the guest-token signing secret in SSM (random if omitted) |
 | `create-user <name> [password]` | Create a host user in Cognito (prompts for password if omitted) |
 | `list-users` | List host users (Cognito) |
 | `delete-user <name>` | Delete a host user (Cognito) |
@@ -197,12 +191,13 @@ npm run cli --workspace @game/cli -- prune-images   # delete inactive image vers
 
 - **Host accounts live in Amazon Cognito** with self-registration **disabled** —
   accounts exist only via `game-admin create-user` (AdminCreateUser). Login uses
-  the admin auth flow and returns a Cognito ID token (RS256), which the control
-  plane verifies against the pool's public JWKS. No password hashing or shared
-  login secret to get wrong.
-- **Guests are anonymous and ephemeral** — never Cognito users. They get a small
-  room-scoped HS256 token (signing secret in SSM SecureString, set out-of-band)
-  used only to authorize their own refresh/status calls.
+  the admin auth flow and returns a Cognito ID token; **host routes are protected
+  by an API Gateway Cognito JWT authorizer**, so the token is verified at the edge
+  and never reaches application code unverified. No hand-rolled auth.
+- **Guests are anonymous and ephemeral** — never Cognito users. On join they get
+  a random **opaque session token**; the control plane stores the
+  `{token → room, guest}` binding in DynamoDB. It needs no signing secret, is
+  **revocable** (delete the row), and auto-expires via the table's TTL.
 - MicroVM auth tokens are scoped to a single VM and the gameplay port only, and
   expire within 60 min (the client refreshes proactively). A guest of one room
   cannot mint a token for another.
@@ -214,11 +209,17 @@ npm run cli --workspace @game/cli -- prune-images   # delete inactive image vers
 ### Why Cognito for hosts (and not guests)
 
 Hosts are credentialed users, so they get a managed identity provider: Cognito
-handles password storage, lockout, and token signing/rotation, and disabling
-self-sign-up enforces the "CLI-provisioned only" requirement cleanly. Guests are
-deliberately *not* in the pool — they're throwaway identities tied to one room,
-so a tiny custom token is the right tool and keeps the two trust domains separate
-(Cognito RS256 for hosts, HS256 for guests; the API accepts both).
+handles password storage, lockout, and token signing/rotation; disabling
+self-sign-up enforces "CLI-provisioned only"; and an API Gateway JWT authorizer
+verifies host tokens at the edge so we never hand-roll auth.
+
+Guests are deliberately *not* in the pool — they're anonymous, throwaway
+identities tied to one room. Rather than mint a signed JWT for them (which means
+managing a signing secret), we issue an **opaque token backed by a DynamoDB
+session row**: no secret to store or leak, revocable, and TTL-reaped. This is the
+textbook server-side-session pattern, and it scales cleanly — the per-request
+lookup happens only on the handful of guest control-plane calls (join, refresh,
+status poll), never during gameplay (which goes straight to the MicroVM).
 
 ## License
 
