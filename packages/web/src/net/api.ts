@@ -69,3 +69,11 @@ export function refreshToken(roomId: string, token: string): Promise<RefreshToke
 export function closeRoom(roomId: string, token: string): Promise<void> {
   return req(`/rooms/${roomId}/close`, { method: 'POST', token });
 }
+
+export function suspendRoom(roomId: string, token: string): Promise<void> {
+  return req(`/rooms/${roomId}/suspend`, { method: 'POST', token });
+}
+
+export function resumeRoom(roomId: string, token: string): Promise<void> {
+  return req(`/rooms/${roomId}/resume`, { method: 'POST', token });
+}

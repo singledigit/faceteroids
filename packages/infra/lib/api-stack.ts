@@ -174,6 +174,8 @@ export class ApiStack extends Stack {
         actions: [
           'lambda:RunMicrovm',
           'lambda:CreateMicrovmAuthToken',
+          'lambda:SuspendMicrovm',
+          'lambda:ResumeMicrovm',
           'lambda:TerminateMicrovm',
           'lambda:GetMicrovm',
         ],
@@ -230,6 +232,8 @@ export class ApiStack extends Stack {
       ['/rooms/{roomId}', HttpMethod.GET],
       ['/rooms/{roomId}/join', HttpMethod.POST],
       ['/rooms/{roomId}/close', HttpMethod.POST],
+      ['/rooms/{roomId}/suspend', HttpMethod.POST],
+      ['/rooms/{roomId}/resume', HttpMethod.POST],
       ['/tokens/{roomId}/refresh', HttpMethod.POST],
     ];
     for (const [path, method] of routes) {

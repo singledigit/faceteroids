@@ -10,6 +10,7 @@ import { roomsJoin } from './handlers/roomsJoin.js';
 import { roomsStatus } from './handlers/roomsStatus.js';
 import { tokensRefresh } from './handlers/tokensRefresh.js';
 import { roomsClose } from './handlers/roomsClose.js';
+import { roomsSuspend, roomsResume } from './handlers/roomsLifecycle.js';
 
 type Handler = (e: APIGatewayProxyEventV2) => Promise<APIGatewayProxyResultV2>;
 
@@ -19,6 +20,8 @@ const ROUTES: Record<string, Handler> = {
   'GET /rooms/{roomId}': roomsStatus,
   'POST /rooms/{roomId}/join': roomsJoin,
   'POST /rooms/{roomId}/close': roomsClose,
+  'POST /rooms/{roomId}/suspend': roomsSuspend,
+  'POST /rooms/{roomId}/resume': roomsResume,
   'POST /tokens/{roomId}/refresh': tokensRefresh,
 };
 

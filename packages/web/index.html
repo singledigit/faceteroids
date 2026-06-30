@@ -65,6 +65,7 @@
         padding: 0.35rem 0.8rem; border-radius: 6px; font-size: 0.9rem;
       }
       #start-game { background: #2a6; border-color: #2a6; }
+      #pause-game { background: #b80; border-color: #b80; }
       #end-game { background: #a33; border-color: #a33; }
       .hint { opacity: 0.6; font-size: 0.85rem; margin-top: 1rem; }
     </style>
@@ -101,6 +102,7 @@
     <div id="hostbar">
       <span id="wait-msg"></span>
       <button id="start-game" style="display:none">▶ Start game</button>
+      <button id="pause-game" style="display:none">⏸ Pause</button>
       <button id="end-game" style="display:none">■ End game</button>
     </div>
     <div id="game"><canvas id="canvas"></canvas></div>

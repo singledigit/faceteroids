@@ -45,6 +45,7 @@ function startGame(cfg: PlayConfig): void {
   $('hostbar').style.display = 'flex'; // may have been hidden by a prior End game
   myPlayerId = cfg.playerId;
   let ended = false;
+  let paused = false;
 
   // Persist the session so a browser refresh resumes this exact room + identity.
   if (cfg.session) saveSession(cfg.session);
@@ -62,6 +63,65 @@ function startGame(cfg: PlayConfig): void {
     currentToken = wsToken;
   });
 
+  // On an unexpected disconnect, decide what to do from the room's status rather
+  // than blindly reconnecting: a paused (SUSPENDED) room must NOT be reconnected
+  // to — that would trigger auto-resume and undo the pause. Instead we wait and
+  // poll until the host resumes (status RUNNING), then reconnect.
+  const onDisconnected = async () => {
+    sampler.stop();
+    if (ended) return;
+    let status: string | undefined;
+    if (cfg.roomId) {
+      try {
+        status = (await api.getRoomStatus(cfg.roomId)).status;
+      } catch {
+        /* control plane unreachable — fall back to a plain reconnect */
+      }
+    }
+    if (status === 'CLOSED' || status === 'TERMINATED') {
+      ended = true;
+      clearSession();
+      setStatus('The room has been closed.');
+      return;
+    }
+    if (status === 'SUSPENDED') {
+      paused = true;
+      showPausedOverlay();
+      pollUntilRunning();
+      return;
+    }
+    setStatus('Disconnected. Reconnecting…', () => setTimeout(connect, 1500));
+  };
+
+  // While paused, poll the control plane (which never touches the VM) until the
+  // host resumes the room, then transparently reconnect.
+  const pollUntilRunning = () => {
+    if (ended || !cfg.roomId) return;
+    window.setTimeout(async () => {
+      if (ended) return;
+      try {
+        const s = (await api.getRoomStatus(cfg.roomId!)).status;
+        if (s === 'CLOSED' || s === 'TERMINATED') {
+          ended = true;
+          clearSession();
+          setStatus('The room has been closed.');
+          return;
+        }
+        if (s === 'RUNNING') {
+          paused = false;
+          $('status').style.display = 'none';
+          waitMsg.style.display = 'none';
+          pauseBtn.textContent = '⏸ Pause';
+          connect();
+          return;
+        }
+      } catch {
+        /* keep polling */
+      }
+      pollUntilRunning();
+    }, 2000);
+  };
+
   const connect = () => {
     sampler.stop(); // detach from any prior socket before reconnecting
     activeClient?.close();
@@ -74,8 +134,7 @@ function startGame(cfg: PlayConfig): void {
         sampler.start(client);
       },
       onClose: () => {
-        sampler.stop();
-        if (!ended) setStatus('Disconnected. Reconnecting…', () => setTimeout(connect, 1500));
+        void onDisconnected();
       },
       onMessage: (msg: ServerMessage) => {
         if (msg.t === 'welcome') myPlayerId = msg.playerId;
@@ -98,9 +157,18 @@ function startGame(cfg: PlayConfig): void {
 
   // --- Host/waiting-room HUD ---
   const startBtn = $('start-game') as HTMLButtonElement;
+  const pauseBtn = $('pause-game') as HTMLButtonElement;
   const endBtn = $('end-game') as HTMLButtonElement;
   const waitMsg = $('wait-msg');
   let lastPhase = '';
+
+  function showPausedOverlay(): void {
+    waitMsg.style.display = 'block';
+    waitMsg.textContent = cfg.isHost
+      ? 'Paused — the room is suspended. Press Resume to continue.'
+      : 'The host paused the game. Waiting to resume…';
+    if (cfg.isHost) $('pause-game').textContent = '▶ Resume';
+  }
 
   function updateHud(phase: string): void {
     if (phase !== lastPhase) {
@@ -108,16 +176,54 @@ function startGame(cfg: PlayConfig): void {
       const inLobby = phase === 'lobby';
       // Start button: host only, only while waiting.
       startBtn.style.display = cfg.isHost && inLobby ? 'inline-block' : 'none';
-      // Waiting message: everyone, only while waiting.
-      waitMsg.style.display = inLobby ? 'block' : 'none';
-      waitMsg.textContent = cfg.isHost
-        ? 'Waiting room — share the link, then press Start.'
-        : 'Waiting for the host to start…';
+      // Pause button: host only, only once the game is actually running.
+      pauseBtn.style.display = cfg.isHost && !inLobby ? 'inline-block' : 'none';
+      // Waiting message: everyone, only while waiting (and not while paused).
+      if (!paused) {
+        waitMsg.style.display = inLobby ? 'block' : 'none';
+        waitMsg.textContent = cfg.isHost
+          ? 'Waiting room — share the link, then press Start.'
+          : 'Waiting for the host to start…';
+      }
     }
   }
 
   if (cfg.isHost) {
     startBtn.onclick = () => activeClient?.start();
+
+    // Pause: suspend the VM (state is snapshotted). The client then disconnects;
+    // onDisconnected sees SUSPENDED and holds. The same button resumes when
+    // clicked again. Visibility is managed by updateHud (shown once playing).
+    pauseBtn.onclick = async () => {
+      if (!cfg.roomId || !cfg.hostToken) return;
+      if (!paused) {
+        pauseBtn.disabled = true;
+        try {
+          await api.suspendRoom(cfg.roomId, cfg.hostToken);
+          // The socket will drop; onDisconnected handles the SUSPENDED state.
+        } catch {
+          setStatus('Could not pause the room.');
+        } finally {
+          pauseBtn.disabled = false;
+        }
+      } else {
+        // Resume from the paused state: tell the control plane, then reconnect.
+        pauseBtn.disabled = true;
+        try {
+          await api.resumeRoom(cfg.roomId, cfg.hostToken);
+          paused = false;
+          $('status').style.display = 'none';
+          waitMsg.style.display = 'none';
+          pauseBtn.textContent = '⏸ Pause';
+          connect();
+        } catch {
+          setStatus('Could not resume the room.');
+        } finally {
+          pauseBtn.disabled = false;
+        }
+      }
+    };
+
     // End game: terminate the MicroVM via the control plane, then stop.
     endBtn.style.display = 'inline-block';
     endBtn.onclick = async () => {
@@ -136,6 +242,7 @@ function startGame(cfg: PlayConfig): void {
       $('share').style.display = 'none';
       $('hostbar').style.display = 'none';
       startBtn.style.display = 'none';
+      pauseBtn.style.display = 'none';
       endBtn.style.display = 'none';
       waitMsg.style.display = 'none';
       $('game').style.display = 'none';

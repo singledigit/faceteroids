@@ -114,7 +114,9 @@ Open `AsteroidsApi.WebUrl` in a browser:
 
 - **Host:** log in, pick a mode, **Create & play** — this runs a MicroVM, shows a
   shareable link, and drops you into a waiting room. Press **Start** when ready;
-  **End game** terminates the MicroVM.
+  **Pause** suspends the MicroVM (RAM+disk snapshot — game state is frozen and
+  compute billing stops) and the same button resumes it; **End game** terminates
+  the MicroVM. While paused, clients wait and auto-rejoin when the host resumes.
 - **Guests:** open the shared `?room=<id>` link, enter a name, **Play** — no login.
 
 > The client resolves the API at runtime from `/config.json` (written by CDK), so

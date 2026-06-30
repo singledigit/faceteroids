@@ -3,6 +3,8 @@
 import {
   CreateMicrovmAuthTokenCommand,
   RunMicrovmCommand,
+  SuspendMicrovmCommand,
+  ResumeMicrovmCommand,
   TerminateMicrovmCommand,
   LambdaMicrovms,
 } from '@aws-sdk/client-lambda-microvms';
@@ -72,4 +74,14 @@ export async function mintWsToken(microvmId: string): Promise<TokenResult> {
 
 export async function terminateVm(microvmId: string): Promise<void> {
   await client.send(new TerminateMicrovmCommand({ microvmIdentifier: microvmId }));
+}
+
+/** Pause: snapshot RAM+disk and stop billing for compute. State is preserved. */
+export async function suspendVm(microvmId: string): Promise<void> {
+  await client.send(new SuspendMicrovmCommand({ microvmIdentifier: microvmId }));
+}
+
+/** Resume a suspended VM from its snapshot (game state intact). */
+export async function resumeVm(microvmId: string): Promise<void> {
+  await client.send(new ResumeMicrovmCommand({ microvmIdentifier: microvmId }));
 }

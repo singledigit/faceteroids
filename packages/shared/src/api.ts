@@ -32,7 +32,12 @@ export interface CreateRoomResponse extends RoomConnectionInfo {
   hostSecret: string;
 }
 
-export type RoomStatus = 'STARTING' | 'RUNNING' | 'CLOSED' | 'TERMINATED';
+export type RoomStatus =
+  | 'STARTING'
+  | 'RUNNING'
+  | 'SUSPENDED'
+  | 'CLOSED'
+  | 'TERMINATED';
 
 export interface RoomStatusResponse {
   roomId: string;
