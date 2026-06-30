@@ -5,107 +5,258 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MicroVM Asteroids</title>
     <style>
-      :root { color-scheme: dark; }
+      :root {
+        color-scheme: dark;
+        --bg: #07070e;
+        --panel: #11131d;
+        --panel-2: #0c0e17;
+        --line: #1e2233;
+        --line-soft: #171a28;
+        --text: #e6e9f5;
+        --muted: #8a90a6;
+        --accent: #5eead4;      /* teal */
+        --accent-2: #818cf8;    /* indigo */
+        --danger: #f4708a;
+        --warn: #f0b24b;
+        --radius: 14px;
+        --shadow: 0 10px 40px -12px rgba(0,0,0,0.7);
+        --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
       * { box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
         margin: 0;
-        background: #06060c;
-        color: #cce;
-        font-family: system-ui, sans-serif;
+        background:
+          radial-gradient(900px 600px at 80% -10%, rgba(129,140,248,0.10), transparent 60%),
+          radial-gradient(800px 500px at 10% 110%, rgba(94,234,212,0.08), transparent 55%),
+          var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        -webkit-font-smoothing: antialiased;
         display: flex;
         align-items: center;
         justify-content: center;
         min-height: 100vh;
       }
-      #lobby { text-align: center; padding: 2rem; max-width: 28rem; }
-      h1 { font-weight: 700; letter-spacing: 0.04em; }
-      h2 { font-weight: 600; opacity: 0.9; }
-      input, button, select {
-        font-size: 1rem;
-        padding: 0.6rem 0.9rem;
-        border-radius: 8px;
-        border: 1px solid #334;
-        background: #11131f;
-        color: #cce;
-        margin: 0.25rem;
+
+      /* ---------- Lobby card ---------- */
+      #lobby {
+        width: min(92vw, 26rem);
+        padding: 1.75rem;
+        background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent), var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        box-shadow: var(--shadow);
       }
-      button { background: #2a6; border-color: #2a6; cursor: pointer; font-weight: 600; }
-      button:hover { background: #3b7; }
-      .box { margin: 1rem 0; padding: 1rem; border: 1px solid #223; border-radius: 12px; }
+      .brand {
+        display: flex; align-items: center; gap: 0.6rem;
+        margin-bottom: 0.25rem;
+      }
+      .brand .mark {
+        width: 34px; height: 34px; flex: none;
+        display: grid; place-items: center;
+        border-radius: 10px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: #06121a; font-size: 1.1rem; font-weight: 800;
+        box-shadow: 0 6px 18px -6px rgba(94,234,212,0.6);
+      }
+      .brand h1 {
+        font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; margin: 0;
+      }
+      .brand .sub { margin: 0; font-size: 0.72rem; color: var(--muted); letter-spacing: 0.02em; }
+
+      .flow-title {
+        font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.12em;
+        color: var(--muted); margin: 1.4rem 0 0.7rem;
+      }
+
+      label { display: block; font-size: 0.78rem; color: var(--muted); margin: 0 0 0.3rem 0.15rem; }
+      .field { margin-bottom: 0.7rem; }
+
+      input, select {
+        width: 100%;
+        font-size: 0.95rem;
+        font-family: inherit;
+        padding: 0.7rem 0.85rem;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--text);
+        outline: none;
+        transition: border-color 0.15s, box-shadow 0.15s;
+      }
+      input::placeholder { color: #555b70; }
+      input:focus, select:focus {
+        border-color: var(--accent-2);
+        box-shadow: 0 0 0 3px rgba(129,140,248,0.18);
+      }
+
+      button {
+        font-family: inherit; font-size: 0.95rem; font-weight: 600;
+        padding: 0.7rem 1rem; border-radius: 10px; border: 1px solid transparent;
+        background: var(--line); color: var(--text); cursor: pointer;
+        transition: transform 0.05s, filter 0.15s, background 0.15s;
+      }
+      button:hover { filter: brightness(1.12); }
+      button:active { transform: translateY(1px); }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .btn-primary {
+        width: 100%; margin-top: 0.3rem;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: #06121a; font-weight: 700;
+      }
+
+      /* Mode picker as pills */
+      .modes { display: grid; gap: 0.5rem; margin-bottom: 0.9rem; }
+      .mode-opt {
+        text-align: left; width: 100%;
+        padding: 0.6rem 0.8rem; border-radius: 10px;
+        border: 1px solid var(--line); background: var(--panel-2);
+        display: flex; flex-direction: column; gap: 0.1rem;
+      }
+      .mode-opt .t { font-weight: 600; font-size: 0.9rem; color: var(--text); }
+      .mode-opt .d { font-size: 0.74rem; color: var(--muted); }
+      .mode-opt[aria-pressed="true"] {
+        border-color: var(--accent); background: rgba(94,234,212,0.08);
+        box-shadow: 0 0 0 1px rgba(94,234,212,0.25) inset;
+      }
+
+      /* Logged-in chip */
+      #account {
+        display: none; align-items: center; justify-content: space-between;
+        gap: 0.5rem; margin-top: 0.9rem; padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+        background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 10px;
+        font-size: 0.8rem; color: var(--muted);
+      }
+      #account .who { color: var(--text); font-weight: 600; }
+      #account button { padding: 0.35rem 0.6rem; font-size: 0.78rem; font-weight: 600; background: transparent; border-color: var(--line); color: var(--muted); }
+
+      .divider {
+        display: flex; align-items: center; gap: 0.6rem;
+        margin: 1.25rem 0; color: var(--muted); font-size: 0.72rem; letter-spacing: 0.08em;
+      }
+      .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line-soft); }
+
+      #status {
+        display: none; margin-top: 1rem; padding: 0.6rem 0.85rem;
+        background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+        font-size: 0.85rem; color: var(--text);
+      }
+      .hint {
+        margin: 1.25rem 0 0; text-align: center;
+        font-size: 0.76rem; color: var(--muted);
+      }
+      .hint kbd {
+        background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px;
+        padding: 0.05rem 0.35rem; font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--text);
+      }
+
+      /* ---------- In-game chrome ---------- */
       #game { display: none; }
       canvas {
-        display: block; background: #0a0a12; border: 1px solid #223;
+        display: block; margin: 0 auto;
+        background:
+          radial-gradient(1200px 800px at 50% 50%, #0b0e1a, #070710);
+        border: 1px solid var(--line);
+        border-radius: 12px;
         max-width: 100vw; max-height: 100vh;
+        box-shadow: var(--shadow);
       }
-      #status {
-        display: none; margin-top: 1rem; background: #1a1d2e;
-        padding: 0.5rem 1rem; border-radius: 8px;
+
+      /* Top toolbar: share link + host controls, glassy pill bar */
+      #topbar {
+        position: fixed; top: 0.75rem; left: 50%; transform: translateX(-50%);
+        z-index: 10; display: none; align-items: center; gap: 0.6rem;
+        padding: 0.45rem 0.55rem;
+        background: rgba(14,16,26,0.82); backdrop-filter: blur(10px);
+        border: 1px solid var(--line); border-radius: 999px;
+        box-shadow: var(--shadow); max-width: 94vw;
       }
-      /* Share banner: fixed at top so it stays visible during the game. */
-      #share {
-        display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 10;
-        align-items: center; justify-content: center; gap: 0.5rem;
-        padding: 0.6rem 1rem; background: #14233a; border-bottom: 1px solid #2a6;
-        font-size: 0.9rem;
-      }
+      #share { display: none; align-items: center; gap: 0.45rem; }
+      #share .lbl { font-size: 0.8rem; color: var(--muted); padding-left: 0.4rem; }
       #share input {
-        flex: 0 1 26rem; background: #0a0a12; border: 1px solid #2a6;
-        padding: 0.4rem 0.6rem; border-radius: 6px; color: #cce;
+        width: 15rem; padding: 0.4rem 0.6rem; font-size: 0.8rem; border-radius: 8px;
+        background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
       }
-      #share button { padding: 0.4rem 0.8rem; margin: 0; }
-      /* Host control bar: sits just under the share banner, over the game. */
-      #hostbar {
-        position: fixed; top: 3.1rem; left: 0; right: 0; z-index: 9;
-        display: flex; align-items: center; justify-content: center; gap: 0.75rem;
-        padding: 0.4rem; pointer-events: none;
+      #share button, #topbar button {
+        padding: 0.45rem 0.8rem; font-size: 0.82rem; border-radius: 999px;
       }
-      #hostbar > * { pointer-events: auto; }
+      .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0.1rem 0; }
       #wait-msg {
-        display: none; background: rgba(20,35,58,0.9); color: #cce;
-        padding: 0.35rem 0.8rem; border-radius: 6px; font-size: 0.9rem;
+        display: none; font-size: 0.82rem; color: var(--text);
+        padding: 0.3rem 0.7rem; background: rgba(240,178,75,0.12);
+        border: 1px solid rgba(240,178,75,0.4); border-radius: 999px;
       }
-      #start-game { background: #2a6; border-color: #2a6; }
-      #pause-game { background: #b80; border-color: #b80; }
-      #end-game { background: #a33; border-color: #a33; }
-      .hint { opacity: 0.6; font-size: 0.85rem; margin-top: 1rem; }
+      #start-game { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #06121a; font-weight: 700; }
+      #pause-game { background: rgba(240,178,75,0.15); border-color: rgba(240,178,75,0.5); color: var(--warn); }
+      #end-game   { background: rgba(244,112,138,0.14); border-color: rgba(244,112,138,0.5); color: var(--danger); }
     </style>
   </head>
   <body>
+    <!-- ================= Lobby ================= -->
     <div id="lobby">
-      <h1>▲ MicroVM Asteroids</h1>
-      <h2 id="flow-title"></h2>
-
-      <div id="login-box" class="box" style="display:none">
-        <p>Host login</p>
-        <div><input id="username" placeholder="Username" autocomplete="username" /></div>
-        <div><input id="password" type="password" placeholder="Password" autocomplete="current-password" /></div>
-        <button id="login">Log in</button>
+      <div class="brand">
+        <div class="mark">▲</div>
+        <div>
+          <h1>MicroVM Asteroids</h1>
+          <p class="sub">Real-time multiplayer · one MicroVM per room</p>
+        </div>
       </div>
 
-      <div id="create-box" class="box" style="display:none">
-        <p>Create a room</p>
-        <div><input id="host-name" placeholder="Your name" maxlength="24" autocomplete="off" /></div>
-        <div><select id="mode"></select></div>
-        <button id="create">Create &amp; play</button>
+      <!-- Host: log in -->
+      <div id="login-box" style="display:none">
+        <p class="flow-title">Host sign in</p>
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" placeholder="alice" autocomplete="username" />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+        <button id="login" class="btn-primary">Sign in</button>
       </div>
 
-      <div id="join-box" class="box">
-        <div><input id="name" placeholder="Your name" maxlength="24" autocomplete="off" /></div>
-        <button id="play">Play</button>
+      <!-- Host: create a room (after sign in) -->
+      <div id="create-box" style="display:none">
+        <p class="flow-title">New game</p>
+        <div class="field">
+          <label for="host-name">Your name</label>
+          <input id="host-name" placeholder="Your name" maxlength="24" autocomplete="off" />
+        </div>
+        <label>Mode</label>
+        <div id="modes" class="modes"></div>
+        <button id="create" class="btn-primary">Create &amp; play</button>
+        <div id="account">
+          <span>Signed in as <span class="who" id="who"></span></span>
+          <button id="logout">Log out</button>
+        </div>
+      </div>
+
+      <!-- Guest: join via shared link -->
+      <div id="join-box">
+        <p class="flow-title">Join game</p>
+        <div class="field">
+          <label for="name">Your name</label>
+          <input id="name" placeholder="Your name" maxlength="24" autocomplete="off" />
+        </div>
+        <button id="play" class="btn-primary">Play</button>
       </div>
 
       <div id="status"></div>
-      <p class="hint">Arrows / WASD to move &nbsp;·&nbsp; Space to fire</p>
+      <p class="hint"><kbd>↑</kbd> <kbd>W</kbd> thrust · <kbd>←</kbd> <kbd>→</kbd> turn · <kbd>Space</kbd> fire</p>
     </div>
 
-    <div id="share"></div>
-    <div id="hostbar">
+    <!-- ================= In-game ================= -->
+    <div id="topbar">
+      <div id="share"></div>
       <span id="wait-msg"></span>
-      <button id="start-game" style="display:none">▶ Start game</button>
+      <button id="start-game" style="display:none">▶ Start</button>
       <button id="pause-game" style="display:none">⏸ Pause</button>
-      <button id="end-game" style="display:none">■ End game</button>
+      <button id="end-game" style="display:none">■ End</button>
     </div>
     <div id="game"><canvas id="canvas"></canvas></div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

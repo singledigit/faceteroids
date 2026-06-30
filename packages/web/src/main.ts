@@ -10,7 +10,15 @@ import { SnapshotBuffer } from './render/interp.js';
 import { Renderer } from './render/canvas.js';
 import { TokenRefresher } from './net/tokenRefresh.js';
 import { clearSession, loadSession, saveSession, type Session } from './net/session.js';
+import { clearAuth, loadAuth, saveAuth } from './net/auth.js';
 import * as api from './net/api.js';
+
+/** One-line description shown under each mode in the picker. */
+const MODE_BLURB: Record<GameMode, string> = {
+  coop: 'Survive escalating waves together.',
+  ffa: 'Free-for-all — most kills + rocks wins.',
+  lastStanding: 'Last ship flying takes the round.',
+};
 
 const params = new URLSearchParams(location.search);
 const $ = (id: string) => document.getElementById(id)!;
@@ -42,7 +50,7 @@ interface PlayConfig {
 function startGame(cfg: PlayConfig): void {
   $('lobby').style.display = 'none';
   $('game').style.display = 'block';
-  $('hostbar').style.display = 'flex'; // may have been hidden by a prior End game
+  $('topbar').style.display = 'flex'; // may have been hidden by a prior End game
   myPlayerId = cfg.playerId;
   let ended = false;
   let paused = false;
@@ -249,7 +257,7 @@ function startGame(cfg: PlayConfig): void {
       activeClient?.close();
       // Tear down the game view and host controls, then return to the lobby.
       $('share').style.display = 'none';
-      $('hostbar').style.display = 'none';
+      $('topbar').style.display = 'none';
       startBtn.style.display = 'none';
       pauseBtn.style.display = 'none';
       endBtn.style.display = 'none';
@@ -325,31 +333,55 @@ function guestFlow(roomId: string): void {
 
 // ---- Flow 3: host ----
 function hostFlow(): void {
+  // Persistent auth: if a valid host token is stored, skip the login form and go
+  // straight to creating a room — no re-login every visit.
+  const saved = loadAuth();
+  if (saved) {
+    showCreateScreen(saved.token, saved.username);
+    return;
+  }
+
   showLobby('host');
   ($('login') as HTMLButtonElement).onclick = async () => {
     const username = ($('username') as HTMLInputElement).value.trim();
     const password = ($('password') as HTMLInputElement).value;
+    if (!username || !password) {
+      setStatus('Enter your username and password.');
+      return;
+    }
     try {
-      setStatus('Logging in…');
-      const { token } = await api.login(username, password);
+      setStatus('Signing in…');
+      const { token, expiresAt } = await api.login(username, password);
+      saveAuth(token, expiresAt, username); // stays logged in across visits
       $('status').style.display = 'none';
       $('login-box').style.display = 'none';
-      showCreateScreen(token);
+      showCreateScreen(token, username);
     } catch (err) {
-      setStatus(`Login failed: ${(err as Error).message}`);
+      setStatus(`Sign in failed: ${(err as Error).message}`);
     }
   };
 }
 
-/** Populate the mode <select> once (idempotent — safe to call repeatedly). */
-function populateModes(): void {
-  const modeSel = $('mode') as HTMLSelectElement;
-  if (modeSel.options.length > 0) return;
+let selectedMode: GameMode = GAME_MODES[0];
+
+/** Build the mode picker as selectable pills (idempotent). */
+function buildModePicker(): void {
+  const wrap = $('modes');
+  if (wrap.childElementCount > 0) return;
   for (const m of GAME_MODES) {
-    const opt = document.createElement('option');
-    opt.value = m;
-    opt.textContent = MODE_LABELS[m];
-    modeSel.appendChild(opt);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mode-opt';
+    btn.setAttribute('aria-pressed', String(m === selectedMode));
+    btn.innerHTML = `<span class="t">${MODE_LABELS[m]}</span><span class="d">${MODE_BLURB[m]}</span>`;
+    btn.onclick = () => {
+      selectedMode = m;
+      for (const el of wrap.children) {
+        el.setAttribute('aria-pressed', String((el as HTMLElement).dataset.mode === m));
+      }
+    };
+    btn.dataset.mode = m;
+    wrap.appendChild(btn);
   }
 }
 
@@ -357,20 +389,32 @@ function populateModes(): void {
  *  when the host ends a game and returns to the lobby (still authenticated). It
  *  is fully self-contained — it does NOT assume hostFlow() ran first, because a
  *  resumed (post-refresh) session reaches End game without ever calling it. */
-function showCreateScreen(token: string): void {
-  populateModes();
+function showCreateScreen(token: string, username?: string): void {
+  buildModePicker();
   $('game').style.display = 'none';
-  $('hostbar').style.display = 'none';
+  $('topbar').style.display = 'none';
   $('share').style.display = 'none';
   $('status').style.display = 'none';
   $('lobby').style.display = 'block';
-  $('flow-title').textContent = 'Host a game';
   $('login-box').style.display = 'none';
   $('join-box').style.display = 'none';
   $('create-box').style.display = 'block';
 
+  // Signed-in chip + log out.
+  if (username) {
+    $('who').textContent = username;
+    $('account').style.display = 'flex';
+  }
+  ($('logout') as HTMLButtonElement).onclick = () => {
+    clearAuth();
+    clearSession();
+    $('create-box').style.display = 'none';
+    $('account').style.display = 'none';
+    hostFlow();
+  };
+
   ($('create') as HTMLButtonElement).onclick = async () => {
-    const mode = ($('mode') as HTMLSelectElement).value as GameMode;
+    const mode = selectedMode;
     const name = ($('host-name') as HTMLInputElement).value.trim() || 'Host';
     try {
       setStatus('Starting room… (booting MicroVM)');
@@ -398,10 +442,19 @@ function showCreateScreen(token: string): void {
           hostToken: token,
           hostSecret: room.hostSecret,
         },
-        onEnded: () => showCreateScreen(token),
+        onEnded: () => showCreateScreen(token, username),
       });
     } catch (err) {
-      setStatus(`Create failed: ${(err as Error).message}`);
+      // A stale/expired token from a prior visit → clear and bounce to login.
+      const m = (err as Error).message;
+      if (/401|unauthor/i.test(m)) {
+        clearAuth();
+        $('create-box').style.display = 'none';
+        hostFlow();
+        setStatus('Session expired — please sign in again.');
+      } else {
+        setStatus(`Create failed: ${m}`);
+      }
     }
   };
 }
@@ -452,8 +505,6 @@ function showLobby(flow: 'host' | 'guest' | 'local'): void {
   $('login-box').style.display = flow === 'host' ? 'block' : 'none';
   $('create-box').style.display = 'none';
   $('join-box').style.display = flow === 'host' ? 'none' : 'block';
-  $('flow-title').textContent =
-    flow === 'host' ? 'Host a game' : flow === 'guest' ? 'Join the game' : 'Local play';
 }
 
 // ---- Resume after refresh ----
