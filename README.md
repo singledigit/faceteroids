@@ -42,9 +42,9 @@ flowchart LR
 
 Two planes that never mix:
 
-- **Control plane** (`packages/control-plane`, `packages/infra`) — Lambda + API
-  Gateway (HTTP API) + DynamoDB + Cognito, deployed with AWS CDK. Handles host
-  login (Cognito), room lifecycle (`RunMicrovm` / `Suspend` / `Resume` /
+- **Control plane** (`packages/control-plane`, `template.yaml`) — Lambda + API
+  Gateway (HTTP API) + DynamoDB + Cognito, deployed with **AWS SAM**. Handles
+  host login (Cognito), room lifecycle (`RunMicrovm` / `Suspend` / `Resume` /
   `TerminateMicrovm`), and minting short-lived MicroVM auth tokens. Also hosts
   the static web client on S3 + CloudFront.
 - **Data plane** (`packages/game-server`) — runs *inside* each MicroVM. The
@@ -53,13 +53,14 @@ Two planes that never mix:
   can't set WS headers); the proxy strips them before they reach the server.
 
 ```
+template.yaml     AWS SAM stack (DynamoDB, Cognito, HTTP API + Lambda, IAM roles,
+                  S3 artifact + web buckets, CloudFront)
 packages/
   shared/         wire protocol, entities, mode rulesets, API DTOs
   game-server/    authoritative sim (30Hz) + ws server (:8080) + lifecycle hooks (:9000)
   web/            vanilla TS + canvas client (input sampling, snapshot interpolation)
   control-plane/  Lambda router: login, rooms, tokens
-  cli/            admin: bundle-image / create-user / run-room / prune-images
-  infra/          AWS CDK stacks (data, IAM, API + web hosting)
+  cli/            admin: create-user / run-room / prune-images
 ```
 
 ### Why MicroVMs
@@ -114,57 +115,41 @@ npm run typecheck # full type check across workspaces
 
 ## Deploy to AWS
 
+Deployed with **AWS SAM**. Three ordered steps: `sam deploy` provisions the infra
++ control-plane Lambda; `build:back` publishes the MicroVM image; `build:front`
+builds and uploads the web client (it reads the API URL from the stack, so it
+must run after `sam deploy`).
+
 **Prerequisites:** an AWS account in a region where Lambda MicroVMs is available
-(defaults to `us-west-2`), credentials configured, and CDK bootstrapped
-(`npx cdk bootstrap`). Copy `.env.example` and set `AWS_ACCOUNT_ID` / `AWS_REGION`
-(no account ID is baked into the code).
+(defaults to `us-west-2`), credentials configured, the SAM CLI installed, and
+Node 20+.
 
 ```bash
-export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 export AWS_REGION=us-west-2
-export CDK_DEFAULT_ACCOUNT=$AWS_ACCOUNT_ID CDK_DEFAULT_REGION=$AWS_REGION
 
-# 1. Build the web client, then deploy all infra (DynamoDB, IAM roles, control-
-#    plane API, and the S3+CloudFront-hosted client) in one CDK app.
-npm run build
-npx vite build packages/web
-( cd packages/infra && npx cdk deploy --all --require-approval never )
-#    Outputs: AsteroidsApi.ApiUrl and AsteroidsApi.WebUrl (the playable URL).
+# 1. Build + deploy the stack: DynamoDB, Cognito, HTTP API + control-plane Lambda,
+#    MicroVM build/exec IAM roles, S3 buckets, and the CloudFront distribution.
+#    (`sam build` esbuild-bundles the Lambda; first deploy may prompt via --guided.)
+npm run deploy            # = sam build && sam deploy
+#    Outputs include ApiUrl and WebUrl (the playable URL).
 
-# 2a. Bundle the game server + Dockerfile and upload the artifact to S3 (local
-#     prep only — esbuild + zip + S3). Prints the s3:// URI to use below.
-npm run cli --workspace @game/cli -- bundle-image
-CODE_ARTIFACT=s3://<bucket>/microvm-images/asteroids-<stamp>.zip   # from the output above
+# 2. Publish the MicroVM image: bundle the game server, zip it with the Dockerfile,
+#    upload to S3, then `aws lambda-microvms create-microvm-image` (AWS compiles the
+#    Dockerfile server-side — no local Docker), poll to SUCCESSFUL, mark ACTIVE.
+npm run build:back
 
-# 2b. Build the MicroVM image — the actual Lambda MicroVMs service call. AWS
-#     compiles the Dockerfile into the image server-side (no local Docker).
-BASE_IMAGE="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
-BUILD_ROLE=$(aws cloudformation describe-stacks --stack-name AsteroidsIam \
-  --query "Stacks[0].Outputs[?OutputKey=='BuildRoleArn'].OutputValue" --output text)
-aws lambda-microvms create-microvm-image \
-  --region "$AWS_REGION" \
-  --name asteroids \
-  --base-image-arn "$BASE_IMAGE" \
-  --build-role-arn "$BUILD_ROLE" \
-  --code-artifact "{\"uri\":\"$CODE_ARTIFACT\"}" \
-  --hooks "$(cat packages/game-server/image-runtime.json)" \
-  --environment-variables '{"GAME_PORT":"8080","HOOK_PORT":"9000","HOOKS_ENABLED":"true","NODE_ENV":"production"}'
-#     Re-deploying new code? Swap `create-microvm-image` for `update-microvm-image
-#     --image-identifier "$IMG"` (same other args) to add a version.
+# 3. Build the web client, write config.json (the API URL) and upload to S3.
+npm run build:front
 
-# 2c. Poll until the version is SUCCESSFUL, then mark it ACTIVE so RunMicrovm
-#     resolves it without an explicit version. (First build is version 1.0.)
-IMG="arn:aws:lambda:${AWS_REGION}:${AWS_ACCOUNT_ID}:microvm-image:asteroids"
-aws lambda-microvms get-microvm-image-version --region "$AWS_REGION" \
-  --image-identifier "$IMG" --image-version 1.0 --query 'state' --output text   # repeat until SUCCESSFUL
-aws lambda-microvms update-microvm-image-version --region "$AWS_REGION" \
-  --image-identifier "$IMG" --image-version 1.0 --status ACTIVE
-
-# 3. Create a host login in Cognito (interactive password prompt — real terminal).
+# 4. Create a host login in Cognito (interactive password prompt — real terminal).
 npm run cli --workspace @game/cli -- create-user alice
 ```
 
-Open `AsteroidsApi.WebUrl` in a browser:
+> The image build (step 2) is spelled out as explicit `aws lambda-microvms …`
+> calls in `scripts/deploy-back.sh` — the image and per-room VMs are created via
+> the service API, not CloudFormation, so they're not in `template.yaml`.
+
+Open the **WebUrl** output in a browser:
 
 - **Host:** log in, pick a mode, **Create & play** — this runs a MicroVM, shows a
   shareable link, and drops you into a waiting room. Press **Start** when ready;
@@ -173,8 +158,9 @@ Open `AsteroidsApi.WebUrl` in a browser:
   the MicroVM. While paused, clients wait and auto-rejoin when the host resumes.
 - **Guests:** open the shared `?room=<id>` link, enter a name, **Play** — no login.
 
-> The client resolves the API at runtime from `/config.json` (written by CDK), so
-> the same static build works regardless of the API URL.
+> The client resolves the API at runtime from `/config.json` (written by
+> `build:front` from the stack's ApiUrl output), so the same static build works
+> regardless of the API URL.
 
 **Refresh-safe:** the client persists a per-tab session (`sessionStorage`), so a
 browser refresh reconnects to the same room with the same identity. The server
@@ -189,12 +175,14 @@ the disconnect count as a death / last-standing elimination.)
 
 | Command | Purpose |
 |---|---|
-| `bundle-image` | Local prep: esbuild bundle + zip + upload artifact to S3 (prints the s3:// URI). The image itself is built with `aws lambda-microvms create-microvm-image` — see Deploy. |
 | `create-user <name> [password]` | Create a host user in Cognito (prompts for password if omitted) |
 | `list-users` | List host users (Cognito) |
 | `delete-user <name>` | Delete a host user (Cognito) |
 | `run-room [mode]` | Manually run a MicroVM + mint a token (data-plane test) |
 | `prune-images` | Delete old image versions (keep the latest ACTIVE) |
+
+> Image publishing is `npm run build:back` (see Deploy), not a `game-admin`
+> subcommand.
 
 > Omit the password and `create-user` prompts for it on an interactive TTY (no
 > echo); pass it as an argument for scripts / non-interactive shells.
@@ -207,7 +195,7 @@ rows expire via TTL. To remove everything:
 
 ```bash
 npm run cli --workspace @game/cli -- prune-images   # delete inactive image versions
-( cd packages/infra && npx cdk destroy --all )
+sam delete --stack-name asteroids                    # tear down all SAM infra
 ```
 
 > MicroVM image versions incur storage cost even when no VM is running — prune

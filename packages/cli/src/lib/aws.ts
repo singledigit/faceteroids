@@ -6,12 +6,10 @@ import {
   DescribeStacksCommand,
 } from '@aws-sdk/client-cloudformation';
 import { LambdaMicrovms } from '@aws-sdk/client-lambda-microvms';
-import { S3Client } from '@aws-sdk/client-s3';
 import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { REGION } from '../config.js';
 
 export const microvms = new LambdaMicrovms({ region: REGION });
-export const s3 = new S3Client({ region: REGION });
 export const cfn = new CloudFormationClient({ region: REGION });
 export const cognito = new CognitoIdentityProviderClient({ region: REGION });
 

@@ -18,9 +18,8 @@ export const ACCOUNT_ID = requireAccountId();
 export const MICROVM_IMAGE_NAME = process.env.MICROVM_IMAGE_NAME ?? 'asteroids';
 /** Full ARN — required by Get/Update/Run operations (Create takes the bare name). */
 export const MICROVM_IMAGE_ARN = `arn:aws:lambda:${REGION}:${ACCOUNT_ID}:microvm-image:${MICROVM_IMAGE_NAME}`;
-export const TABLE_NAME = process.env.TABLE_NAME ?? 'AsteroidsGame';
-export const DATA_STACK = 'AsteroidsData';
-export const API_STACK = 'AsteroidsApi';
+/** The SAM stack name (samconfig.toml). CLI reads outputs (e.g. UserPoolId) from it. */
+export const STACK_NAME = process.env.STACK_NAME ?? 'asteroids';
 
 /** Gameplay port inside the MicroVM (for the run-room data-plane test). */
 export const GAME_PORT = 8080;

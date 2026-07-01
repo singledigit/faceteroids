@@ -8,8 +8,7 @@
     "packages/game-server",
     "packages/web",
     "packages/control-plane",
-    "packages/cli",
-    "packages/infra"
+    "packages/cli"
   ],
   "scripts": {
     "build": "tsc --build",
@@ -17,7 +16,10 @@
     "dev:server": "npm run dev --workspace @game/game-server",
     "dev:web": "npm run dev --workspace @game/web",
     "test": "npm test --workspace @game/game-server",
-    "typecheck": "tsc --build"
+    "typecheck": "tsc --build",
+    "deploy": "sam build && sam deploy",
+    "build:front": "bash scripts/deploy-front.sh",
+    "build:back": "bash scripts/deploy-back.sh"
   },
   "engines": {
     "node": ">=20"

@@ -13,10 +13,10 @@ import {
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { cognito, stackOutput } from '../lib/aws.js';
-import { API_STACK } from '../config.js';
+import { STACK_NAME } from '../config.js';
 
 async function poolId(): Promise<string> {
-  return stackOutput(API_STACK, 'UserPoolId');
+  return stackOutput(STACK_NAME, 'UserPoolId');
 }
 
 export async function createUser(username?: string, passwordArg?: string): Promise<void> {

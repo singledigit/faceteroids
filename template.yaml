@@ -1,0 +1,373 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Multiplayer Asteroids on AWS Lambda MicroVMs — serverless control plane.
+  One SAM stack: DynamoDB, Cognito (host accounts), the control-plane HTTP API +
+  Lambda router, the MicroVM build/execution IAM roles, the S3 artifact bucket,
+  and the S3 + CloudFront static web hosting. The MicroVM image and the per-room
+  MicroVMs themselves are NOT CloudFormation resources — the image is built with
+  `aws lambda-microvms create-microvm-image` and VMs are run on demand by the
+  control-plane Lambda (see README).
+
+Parameters:
+  ImageName:
+    Type: String
+    Default: asteroids
+    Description: Name of the MicroVM image the build pipeline creates and RunMicrovm references.
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    Architectures: [arm64]            # rule 1: ARM when possible
+    MemorySize: 256
+    Timeout: 30
+    LoggingConfig:
+      LogFormat: JSON
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref GameTable
+        # MicroVM resource ARNs use the COLON form (microvm-image:<name>).
+        MICROVM_IMAGE_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${ImageName}'
+        EXECUTION_ROLE_ARN: !GetAtt MicroVmExecutionRole.Arn
+        COGNITO_USER_POOL_ID: !Ref HostUserPool
+        COGNITO_CLIENT_ID: !Ref HostUserPoolClient
+        WEB_BASE_URL: !Sub 'https://${WebDistribution.DomainName}'
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Data: single DynamoDB table (TTL-reaped rooms + guest sessions).
+  # ---------------------------------------------------------------------------
+  GameTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  # ---------------------------------------------------------------------------
+  # Host identity: Cognito user pool, self-registration DISABLED. Accounts are
+  # created out-of-band (`game-admin create-user`). Guests are anonymous and
+  # never enter the pool.
+  # ---------------------------------------------------------------------------
+  HostUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: AsteroidsHosts
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true   # no public sign-up
+      UsernameAttributes: []
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireUppercase: false
+          RequireSymbols: false
+
+  HostUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref HostUserPool
+      GenerateSecret: false              # public client; admin auth flow only
+      ExplicitAuthFlows: [ALLOW_ADMIN_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      IdTokenValidity: 12
+      AccessTokenValidity: 12
+      TokenValidityUnits: { IdToken: hours, AccessToken: hours }
+
+  # ---------------------------------------------------------------------------
+  # Control plane: one HTTP API + one Lambda router.
+  # Host routes are gated by the Cognito JWT authorizer at the edge; public
+  # routes (login + anonymous-guest join/status/refresh) are open and authorized
+  # in-Lambda by an opaque DynamoDB session token.
+  # ---------------------------------------------------------------------------
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - !Sub 'https://${WebDistribution.DomainName}'
+          - http://localhost:5173
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [content-type, authorization]
+        MaxAge: 3600
+      Auth:
+        # Default to requiring a verified Cognito host token; public routes opt
+        # out per-route with `Authorizer: NONE` (login + anonymous-guest calls).
+        DefaultAuthorizer: HostJwt
+        Authorizers:
+          HostJwt:
+            IdentitySource: '$request.header.Authorization'
+            JwtConfiguration:
+              issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${HostUserPool}'
+              audience:
+                - !Ref HostUserPoolClient
+      # Blunt brute-force / abuse on the open routes.
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  ControlPlaneFn:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Format: cjs
+        Target: node22
+        Minify: true
+        EntryPoints: [index.ts]
+        # The Lambda runtime ships AWS SDK v3 but NOT the lambda-microvms client,
+        # so bundle everything (don't mark @aws-sdk/* external).
+        External: []
+    Properties:
+      CodeUri: packages/control-plane/src/
+      Handler: index.handler
+      Policies:
+        # rule 3: SAM policy template first…
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        # …then inline for actions with no SAM template / managed policy.
+        - Statement:
+            - Sid: CognitoHostLogin
+              Effect: Allow
+              Action: cognito-idp:AdminInitiateAuth
+              Resource: !GetAtt HostUserPool.Arn
+            - Sid: MicroVmControl
+              Effect: Allow
+              Action:
+                - lambda:RunMicrovm
+                - lambda:CreateMicrovmAuthToken
+                - lambda:SuspendMicrovm
+                - lambda:ResumeMicrovm
+                - lambda:TerminateMicrovm
+                - lambda:GetMicrovm
+              Resource:
+                - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${ImageName}'
+                - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm:*'
+            - Sid: PassExecutionRole
+              Effect: Allow
+              Action: iam:PassRole
+              Resource: !GetAtt MicroVmExecutionRole.Arn
+            - Sid: PassNetworkConnectors
+              Effect: Allow
+              Action: lambda:PassNetworkConnector
+              Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:*'
+      Events:
+        # --- Public routes (no authorizer): login + anonymous-guest calls ---
+        Login:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /auth/login
+            Auth: { Authorizer: NONE }
+        RoomStatus:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: GET
+            Path: /rooms/{roomId}
+            Auth: { Authorizer: NONE }
+        RoomJoin:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /rooms/{roomId}/join
+            Auth: { Authorizer: NONE }
+        TokenRefresh:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /tokens/{roomId}/refresh
+            Auth: { Authorizer: NONE }
+        # --- Host-only routes (Cognito JWT authorizer at the edge) ---
+        RoomCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /rooms
+            Auth: { Authorizer: HostJwt }
+        RoomClose:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /rooms/{roomId}/close
+            Auth: { Authorizer: HostJwt }
+        RoomSuspend:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /rooms/{roomId}/suspend
+            Auth: { Authorizer: HostJwt }
+        RoomResume:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /rooms/{roomId}/resume
+            Auth: { Authorizer: HostJwt }
+        RoomToken:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Method: POST
+            Path: /rooms/{roomId}/token
+            Auth: { Authorizer: HostJwt }
+
+  # ---------------------------------------------------------------------------
+  # MicroVM IAM roles — standalone roles assumed by the Lambda MicroVMs SERVICE
+  # (not by a function), so they can't be folded into the function's Policies.
+  # Confused-deputy mitigation: trust lambda.amazonaws.com with aws:SourceAccount.
+  # ---------------------------------------------------------------------------
+  MicroVmBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Assumed by Lambda during CreateMicrovmImage (reads the S3 artifact).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: build
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ArtifactBucket.Arn}/microvm-images/*'
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:*:*:log-group:/aws/lambda-microvms/*'
+
+  MicroVmExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Assumed at runtime inside each Asteroids MicroVM (logs only).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: { aws:SourceAccount: !Ref AWS::AccountId }
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:${AWS::Partition}:logs:*:*:log-group:/aws/lambda-microvms/*'
+
+  # ---------------------------------------------------------------------------
+  # S3 artifact bucket — holds the zipped Dockerfile + bundled server uploaded
+  # by `build:back`, which CreateMicrovmImage reads.
+  # ---------------------------------------------------------------------------
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-artifacts
+            Prefix: microvm-images/
+            Status: Enabled
+            ExpirationInDays: 14
+
+  # ---------------------------------------------------------------------------
+  # Static web hosting: private S3 bucket fronted by CloudFront (OAC), caching
+  # DISABLED. Client assets are pushed by `build:front` (aws s3 cp).
+  # ---------------------------------------------------------------------------
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  WebOac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-web-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        # SPA: serve index.html for client-side routes / missing keys.
+        CustomErrorResponses:
+          - { ErrorCode: 403, ResponseCode: 200, ResponsePagePath: /index.html }
+          - { ErrorCode: 404, ResponseCode: 200, ResponsePagePath: /index.html }
+        Origins:
+          - Id: web-s3
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !Ref WebOac
+            S3OriginConfig: { OriginAccessIdentity: '' }
+        DefaultCacheBehavior:
+          TargetOriginId: web-s3
+          ViewerProtocolPolicy: redirect-to-https
+          # AWS-managed CachingDisabled policy — no caching (rule: no caching).
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub '${WebBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}'
+
+Outputs:
+  ApiUrl:
+    Description: Control-plane HTTP API base URL.
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+  WebUrl:
+    Description: Playable URL (CloudFront).
+    Value: !Sub 'https://${WebDistribution.DomainName}'
+  WebBucketName:
+    Value: !Ref WebBucket
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+  BuildRoleArn:
+    Value: !GetAtt MicroVmBuildRole.Arn
+  ExecutionRoleArn:
+    Value: !GetAtt MicroVmExecutionRole.Arn
+  UserPoolId:
+    Value: !Ref HostUserPool
+  UserPoolClientId:
+    Value: !Ref HostUserPoolClient
