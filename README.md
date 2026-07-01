@@ -156,31 +156,41 @@ sam build && sam deploy          # outputs include ApiUrl and WebUrl
 > this sample is to *show* those calls and what each one does rather than hide
 > them behind an opaque wrapper. Read them once, then script them.
 
-Bundle the game server, zip it with the `Dockerfile` **at the archive root** (the
-service requires that), upload to S3, then call the service. AWS compiles the
-Dockerfile server-side — no local Docker.
+Each part below is its own small step so you can see what it does.
+
+**2a — Resolve the values the image calls need** (bucket and build role come from
+the stack you just deployed):
 
 ```bash
-# --- resolve the stack outputs the image calls need ---
 STACK=asteroids
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK \
   --query "Stacks[0].Outputs[?OutputKey=='ArtifactBucketName'].OutputValue" --output text)
 BUILD_ROLE=$(aws cloudformation describe-stacks --stack-name $STACK \
   --query "Stacks[0].Outputs[?OutputKey=='BuildRoleArn'].OutputValue" --output text)
-# (brace ${AWS_REGION} — a bare $AWS_REGION:aws triggers zsh's `:a` history modifier)
-IMG="arn:aws:lambda:${AWS_REGION}:${ACCOUNT}:microvm-image:asteroids"
-BASE="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
 
-# --- bundle + zip + upload (Dockerfile at zip root) ---
-npm run bundle --prefix gameserver                       # -> gameserver/dist/bundle.mjs
-zip -j image.zip gameserver/Dockerfile
+IMG="arn:aws:lambda:${AWS_REGION}:${ACCOUNT}:microvm-image:asteroids"   # the image we manage
+BASE="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"          # AWS-managed base
+```
+
+> Brace `${AWS_REGION}` in those ARNs — a bare `$AWS_REGION:aws` triggers zsh's
+> `:a` history modifier and silently mangles the ARN.
+
+**2b — Bundle the server and upload the artifact.** The `Dockerfile` must sit at
+the **root** of the zip (the service looks for it there); AWS compiles it
+server-side, so no local Docker is needed:
+
+```bash
+npm run bundle --prefix gameserver                    # -> gameserver/dist/bundle.mjs
+zip -j image.zip gameserver/Dockerfile                # Dockerfile at archive root
 ( cd gameserver && zip ../image.zip dist/bundle.mjs )
 aws s3 cp image.zip "s3://$BUCKET/microvm-images/asteroids.zip"
+```
 
-# --- create the image (first time). Returns imageVersion (e.g. "1.0"). ---
-#     On later publishes swap `create-microvm-image --name asteroids`
-#     for `update-microvm-image --image-identifier "$IMG"` (adds a new version).
+**2c — Create the image.** This kicks off a server-side build and returns an
+`imageVersion` (e.g. `1.0`):
+
+```bash
 aws lambda-microvms create-microvm-image \
   --name asteroids \
   --base-image-arn "$BASE" \
@@ -188,13 +198,22 @@ aws lambda-microvms create-microvm-image \
   --code-artifact "{\"uri\":\"s3://$BUCKET/microvm-images/asteroids.zip\"}" \
   --hooks "$(cat gameserver/image-runtime.json)" \
   --environment-variables '{"GAME_PORT":"8080","HOOK_PORT":"9000","HOOKS_ENABLED":"true","NODE_ENV":"production"}'
+```
 
-# --- poll until the build finishes (SUCCESSFUL), then activate that version ---
+> **Re-publishing later?** Swap `create-microvm-image --name asteroids` for
+> `update-microvm-image --image-identifier "$IMG"` — same flags, adds a new
+> version instead of erroring that the image exists.
+
+**2d — Wait for the build, then activate.** Poll until the version reports
+`SUCCESSFUL`, then mark it `ACTIVE` so `RunMicrovm` will resolve it:
+
+```bash
 VERSION=1.0
 aws lambda-microvms get-microvm-image-version \
   --image-identifier "$IMG" --image-version "$VERSION" --query state --output text   # repeat until SUCCESSFUL
+
 aws lambda-microvms update-microvm-image-version \
-  --image-identifier "$IMG" --image-version "$VERSION" --status ACTIVE               # so RunMicrovm resolves it
+  --image-identifier "$IMG" --image-version "$VERSION" --status ACTIVE
 ```
 
 ### 3. Deploy the web client
