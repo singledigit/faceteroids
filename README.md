@@ -125,34 +125,82 @@ npm test --prefix gameserver          # unit tests for the authoritative sim
 
 ## Deploy to AWS
 
-Deployed with **AWS SAM**. Three ordered steps: `sam deploy` provisions the infra
-+ control-plane Lambda; `deploy-back.sh` publishes the MicroVM image; `deploy-front.sh`
-builds and uploads the web client (it reads the API URL from the stack, so it
-must run after `sam deploy`).
+Deployed with **AWS SAM** for the infra and **explicit `aws lambda-microvms`
+calls** for the MicroVM image. The image is a Lambda MicroVMs *service* resource,
+not a CloudFormation resource — you create it directly, so those calls are laid
+out here in full rather than hidden behind a script.
 
 **Prerequisites:** an AWS account in a region where Lambda MicroVMs is available
 (defaults to `us-west-2`), credentials configured, the SAM CLI installed, and
 Node 20+.
 
+### 1. Provision the infra (SAM)
+
+Builds/deploys DynamoDB, Cognito, the HTTP API + control-plane Lambda, the
+MicroVM build/exec IAM roles, the S3 buckets, and the CloudFront distribution.
+`sam build` esbuild-bundles the Lambda; the first deploy may prompt via `--guided`.
+
 ```bash
 export AWS_REGION=us-west-2
+sam build && sam deploy          # outputs include ApiUrl and WebUrl
+```
 
-# 1. Build + deploy the stack: DynamoDB, Cognito, HTTP API + control-plane Lambda,
-#    MicroVM build/exec IAM roles, S3 buckets, and the CloudFront distribution.
-#    (`sam build` esbuild-bundles the Lambda; first deploy may prompt via --guided.)
-sam build && sam deploy
-#    Outputs include ApiUrl and WebUrl (the playable URL).
+### 2. Publish the MicroVM image (direct service calls)
 
-# 2. Publish the MicroVM image: bundle the game server, zip it with the Dockerfile,
-#    upload to S3, then `aws lambda-microvms create-microvm-image` (AWS compiles the
-#    Dockerfile server-side — no local Docker), poll to SUCCESSFUL, mark ACTIVE.
-bash scripts/deploy-back.sh
+Bundle the game server, zip it with the `Dockerfile` **at the archive root** (the
+service requires that), upload to S3, then call the service. AWS compiles the
+Dockerfile server-side — no local Docker.
 
-# 3. Build the web client, write config.json (the API URL) and upload to S3.
+```bash
+# --- resolve the stack outputs the image calls need ---
+STACK=asteroids
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK \
+  --query "Stacks[0].Outputs[?OutputKey=='ArtifactBucketName'].OutputValue" --output text)
+BUILD_ROLE=$(aws cloudformation describe-stacks --stack-name $STACK \
+  --query "Stacks[0].Outputs[?OutputKey=='BuildRoleArn'].OutputValue" --output text)
+# (brace ${AWS_REGION} — a bare $AWS_REGION:aws triggers zsh's `:a` history modifier)
+IMG="arn:aws:lambda:${AWS_REGION}:${ACCOUNT}:microvm-image:asteroids"
+BASE="arn:aws:lambda:${AWS_REGION}:aws:microvm-image:al2023-1"
+
+# --- bundle + zip + upload (Dockerfile at zip root) ---
+npm run bundle --prefix gameserver                       # -> gameserver/dist/bundle.mjs
+zip -j image.zip gameserver/Dockerfile
+( cd gameserver && zip ../image.zip dist/bundle.mjs )
+aws s3 cp image.zip "s3://$BUCKET/microvm-images/asteroids.zip"
+
+# --- create the image (first time). Returns imageVersion (e.g. "1.0"). ---
+#     On later publishes swap `create-microvm-image --name asteroids`
+#     for `update-microvm-image --image-identifier "$IMG"` (adds a new version).
+aws lambda-microvms create-microvm-image \
+  --name asteroids \
+  --base-image-arn "$BASE" \
+  --build-role-arn "$BUILD_ROLE" \
+  --code-artifact "{\"uri\":\"s3://$BUCKET/microvm-images/asteroids.zip\"}" \
+  --hooks "$(cat gameserver/image-runtime.json)" \
+  --environment-variables '{"GAME_PORT":"8080","HOOK_PORT":"9000","HOOKS_ENABLED":"true","NODE_ENV":"production"}'
+
+# --- poll until the build finishes (SUCCESSFUL), then activate that version ---
+VERSION=1.0
+aws lambda-microvms get-microvm-image-version \
+  --image-identifier "$IMG" --image-version "$VERSION" --query state --output text   # repeat until SUCCESSFUL
+aws lambda-microvms update-microvm-image-version \
+  --image-identifier "$IMG" --image-version "$VERSION" --status ACTIVE               # so RunMicrovm resolves it
+```
+
+### 3. Deploy the web client
+
+Builds the client, writes `config.json` (the API URL, read at runtime), uploads to S3.
+
+```bash
 bash scripts/deploy-front.sh
+```
 
-# 4. Create a host login directly in Cognito (self-registration is disabled, so
-#    hosts exist only via AdminCreateUser). Use the UserPoolId from the outputs.
+### 4. Create a host login
+
+Self-registration is disabled, so hosts exist only via `admin-create-user`.
+
+```bash
 POOL=$(aws cloudformation describe-stacks --stack-name asteroids \
   --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
 aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice \
@@ -160,10 +208,6 @@ aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice \
 aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username alice \
   --password 'ChangeMe-123!' --permanent
 ```
-
-> The image build (step 2) is spelled out as explicit `aws lambda-microvms …`
-> calls in `scripts/deploy-back.sh` — the image and per-room VMs are created via
-> the service API, not CloudFormation, so they're not in `template.yaml`.
 
 Open the **WebUrl** output in a browser:
 
@@ -197,7 +241,7 @@ calls (`POOL` and `IMG` resolved from the stack outputs / image ARN):
 | Create a host | `aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice --message-action SUPPRESS` then `admin-set-user-password … --permanent` |
 | List hosts | `aws cognito-idp list-users --user-pool-id "$POOL"` |
 | Delete a host | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username alice` |
-| Publish image | `bash scripts/deploy-back.sh` (bundle → zip → `create/update-microvm-image`) |
+| Publish / update image | the `aws lambda-microvms create/update-microvm-image` sequence in [Deploy step 2](#2-publish-the-microvm-image-direct-service-calls) |
 | Prune old image versions | `aws lambda-microvms list-microvm-image-versions --image-identifier "$IMG"` then `delete-microvm-image-version` on inactive ones |
 
 ## Cost & teardown
