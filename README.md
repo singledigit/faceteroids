@@ -1,5 +1,7 @@
 # MicroVM Asteroids
 
+![Two players in a co-op MicroVM Asteroids room, side by side](screen.jpg)
+
 Multiplayer [Asteroids](https://en.wikipedia.org/wiki/Asteroids_(video_game)) on
 **AWS Lambda MicroVMs**. One host logs in, creates a room (picking a game mode),
 and shares a link; others join with no login. **Each room is a dedicated
