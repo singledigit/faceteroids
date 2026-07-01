@@ -1,7 +1,7 @@
-// Canvas renderer: a neon-vector take on Asteroids. Draws a twinkling starfield,
-// deterministically-jagged cratered asteroids with rim light, sleek fighter ships
-// with glowing engine flames + shield rings, glowing bullet tracers, and a modern
-// HUD. Pure rendering from snapshots — no game state lives here.
+// Canvas renderer for Faceteroids. Draws a twinkling starfield, the face sprites
+// that stand in for asteroids (scaled by size, tumbling as they drift), sleek
+// fighter ships with glowing engine flames + shield rings, glowing bullet tracers,
+// and a modern HUD. Pure rendering from snapshots — no game state lives here.
 
 import {
   ASTEROID_RADII,
@@ -60,6 +60,10 @@ export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly stars: Star[] = [];
   private readonly shapeCache = new Map<string, AsteroidShape>();
+  // The face sprite that replaces the classic rock. Drawn once loaded; until
+  // then drawAsteroid falls back to the vector rock so nothing pops in blank.
+  private readonly faceImg = new Image();
+  private faceReady = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -70,6 +74,9 @@ export class Renderer {
     this.ctx = ctx;
     canvas.width = WORLD_WIDTH;
     canvas.height = WORLD_HEIGHT;
+
+    this.faceImg.onload = () => { this.faceReady = true; };
+    this.faceImg.src = '/face.png';
 
     // Static starfield (deterministic enough; purely cosmetic).
     const rnd = mulberry32(0xa57e201d);
@@ -157,9 +164,27 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
-  // ---- Asteroids ----
+  // ---- Faceteroids ----
   private drawAsteroid(ctx: CanvasRenderingContext2D, a: Asteroid): void {
     const r = ASTEROID_RADII[a.size];
+
+    // The face sprite is the asteroid. It tumbles with a.angle and is sized to
+    // the asteroid's collision radius, so a big face that splits (L -> M -> S,
+    // server-authoritative) naturally becomes smaller faces.
+    if (this.faceReady) {
+      const img = this.faceImg;
+      const scale = (r * 2) / Math.max(img.width, img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      ctx.save();
+      ctx.translate(a.pos.x, a.pos.y);
+      ctx.rotate(a.angle);
+      ctx.drawImage(img, -w / 2, -h / 2, w, h);
+      ctx.restore();
+      return;
+    }
+
+    // Fallback: the classic vector rock, until the sprite finishes loading.
     const shape = this.shapeFor(a);
     ctx.save();
     ctx.translate(a.pos.x, a.pos.y);
