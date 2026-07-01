@@ -37,6 +37,9 @@ interface PlayConfig {
   refresher?: TokenRefresher;
   // Host-only controls (waiting room Start + End game / terminate).
   isHost?: boolean;
+  // Room id for EVERY client (host and guest): the disconnect handler reads room
+  // status to detect a paused (SUSPENDED) room and wait instead of reconnecting.
+  // Omitting it makes a client blindly reconnect and auto-resume a paused VM.
   roomId?: string;
   hostToken?: string;
   /** Per-room secret proving host authority on the gameplay WS (host only). */
@@ -314,6 +317,10 @@ function guestFlow(roomId: string): void {
         wsToken: join.wsToken,
         name,
         playerId: join.guestId,
+        // Needed by every client (not just the host): on disconnect the client
+        // checks room status, and if SUSPENDED it must wait/poll instead of
+        // reconnecting — a reconnect's ingress traffic would auto-resume the VM.
+        roomId,
         refresher,
         session: {
           kind: 'guest',
@@ -540,6 +547,7 @@ async function resumeFlow(s: Session, fallback: () => void): Promise<void> {
     } else {
       startGame({
         endpoint: s.endpoint, wsToken, name: s.name, playerId: s.guestId, refresher, session: s,
+        roomId: s.roomId, // so a paused room is detected on disconnect (see guestFlow)
       });
     }
   } catch {
