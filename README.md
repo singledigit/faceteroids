@@ -200,9 +200,12 @@ aws lambda-microvms create-microvm-image \
   --environment-variables '{"GAME_PORT":"8080","HOOK_PORT":"9000","HOOKS_ENABLED":"true","NODE_ENV":"production"}'
 ```
 
-> **Re-publishing later?** Swap `create-microvm-image --name asteroids` for
-> `update-microvm-image --image-identifier "$IMG"` — same flags, adds a new
-> version instead of erroring that the image exists.
+> **Re-publishing later?** Re-run 2b, then swap `create-microvm-image --name
+> asteroids` for `update-microvm-image --image-identifier "$IMG"` (same flags).
+> It returns a **new** `imageVersion` (`2.0`, `3.0`, …) — set `VERSION` to that in
+> 2d, not `1.0`. Activating it only affects **new** rooms; VMs already running keep
+> their old snapshot until they end. Old versions cost storage, so prune them once
+> unused (see [Admin tasks](#admin-tasks-direct-aws-cli)).
 
 **2d — Wait for the build, then activate.** Poll until the version reports
 `SUCCESSFUL`, then mark it `ACTIVE` so `RunMicrovm` will resolve it:
