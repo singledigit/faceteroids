@@ -278,18 +278,44 @@ calls (`POOL` and `IMG` resolved from the stack outputs / image ARN):
 
 Rooms auto-suspend after 15 min idle and auto-terminate 30 min later; the hard
 cap is 8 hours. The host's **End game** button terminates immediately. DynamoDB
-rows expire via TTL. To remove everything:
+rows expire via TTL.
+
+To remove **everything**, tear the pieces down in this order. The image and its
+versions are Lambda MicroVMs *service* resources — `sam delete` does **not** touch
+them, so delete them first (they cost storage even with no VM running).
+
+**T1 — Delete the MicroVM image.** A version must be `INACTIVE` before it can be
+deleted, and the image can't be deleted while any version remains — so deactivate
+every version, delete each, then delete the image:
 
 ```bash
-# delete inactive image versions (storage cost), then tear down all SAM infra
-IMG="arn:aws:lambda:$AWS_REGION:$(aws sts get-caller-identity --query Account --output text):microvm-image:asteroids"
-aws lambda-microvms list-microvm-image-versions --image-identifier "$IMG"  # find inactive versions
-# aws lambda-microvms delete-microvm-image-version --image-identifier "$IMG" --image-version <v>
-sam delete --stack-name asteroids                    # tear down all SAM infra
+IMG="arn:aws:lambda:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text):microvm-image:asteroids"
+
+for V in $(aws lambda-microvms list-microvm-image-versions --image-identifier "$IMG" \
+             --query 'items[].imageVersion' --output text); do
+  aws lambda-microvms update-microvm-image-version --image-identifier "$IMG" --image-version "$V" --status INACTIVE
+  aws lambda-microvms delete-microvm-image-version --image-identifier "$IMG" --image-version "$V"
+done
+aws lambda-microvms delete-microvm-image --image-identifier "$IMG"
 ```
 
-> MicroVM image versions incur storage cost even when no VM is running — prune
-> them when you're done.
+**T2 — Empty the S3 buckets.** CloudFormation won't delete a non-empty bucket, so
+`sam delete` fails unless the artifact + web buckets are emptied first:
+
+```bash
+for KEY in ArtifactBucketName WebBucketName; do
+  B=$(aws cloudformation describe-stacks --stack-name asteroids \
+        --query "Stacks[0].Outputs[?OutputKey=='$KEY'].OutputValue" --output text)
+  aws s3 rm "s3://$B" --recursive
+done
+```
+
+**T3 — Delete the SAM stack** (DynamoDB, Cognito, API + Lambda, IAM roles, buckets,
+CloudFront):
+
+```bash
+sam delete --stack-name asteroids
+```
 
 ## Security notes
 
