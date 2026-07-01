@@ -1,11 +1,12 @@
-# MicroVM Asteroids
+# Faceteroids
 
-![Two players in a co-op MicroVM Asteroids room, side by side](screen.jpg)
+![Two players in a co-op Faceteroids room, side by side](screen.jpg)
 
-Multiplayer [Asteroids](https://en.wikipedia.org/wiki/Asteroids_(video_game)) on
-**AWS Lambda MicroVMs**. One host logs in, creates a room (picking a game mode),
-and shares a link; others join with no login. **Each room is a dedicated
-Firecracker MicroVM** running an authoritative game server.
+**Faceteroids** — multiplayer
+[Asteroids](https://en.wikipedia.org/wiki/Asteroids_(video_game)) (but the rocks
+are faces) on **AWS Lambda MicroVMs**. One host logs in, creates a room (picking a
+game mode), and shares a link; others join with no login. **Each room is a
+dedicated Firecracker MicroVM** running an authoritative game server.
 
 This is a reference sample showing how to use Lambda MicroVMs for sessionful,
 real-time, WebSocket workloads — with a serverless control plane in front.
@@ -123,6 +124,21 @@ npm test --prefix gameserver          # unit tests for the authoritative sim
 ( cd shared && npm run build ) && \
   for d in gameserver frontend control-plane; do ( cd "$d" && npm run build ); done  # typecheck all
 ```
+
+## Change the face
+
+The "asteroids" are a single sprite the client loads from `/face.png`. To use a
+different face, **replace the file** — keep the same name:
+
+```bash
+cp my-face.png frontend/public/face.png     # transparent PNG, roughly square, ~256–512px+
+```
+
+- **Locally:** refresh `npm run dev --prefix frontend` — that's it.
+- **Deployed:** re-run `bash scripts/deploy-front.sh` to rebuild and upload.
+
+Nothing else changes — the server only does physics, so a big face still splits
+into smaller copies of whatever image you drop in.
 
 ## Deploy to AWS
 
