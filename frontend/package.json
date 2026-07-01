@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@game/shared": "*"
+    "@game/shared": "file:../shared"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

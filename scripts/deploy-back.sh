@@ -24,7 +24,7 @@ BASE_IMAGE="arn:aws:lambda:${REGION}:aws:microvm-image:al2023-1"
 
 # 1. Bundle the game server (esbuild) into one self-contained file.
 echo "build:back  bundling game server…"
-npm run bundle --workspace @game/game-server
+npm run bundle --prefix gameserver
 
 GS=gameserver
 STAMP="$(git rev-parse --short HEAD 2>/dev/null || date +%s)"

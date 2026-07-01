@@ -97,9 +97,11 @@ unit-testable without any networking. See `gameserver/test`.
 
 ## Run locally (no AWS)
 
+# Each package is independent (no workspace hoisting) — install per directory,
+# building `shared` first since the others consume its compiled output.
 ```bash
-npm install
-npm run build
+npm run install:all   # loops shared, gameserver, frontend, src/control-plane
+( cd shared && npm run build )
 
 # Terminal 1 — game server
 GAME_MODE=coop npm run dev:server     # ws://localhost:8080/play
@@ -114,8 +116,8 @@ tabs, enter names, and fly. `GAME_MODE` can be `coop`, `ffa`, or `lastStanding`.
 Controls: **Arrows / WASD** to move, **Space** to fire.
 
 ```bash
-npm test          # unit tests for the authoritative sim
-npm run typecheck # full type check across workspaces
+npm test          # unit tests for the authoritative sim (gameserver)
+npm run typecheck # build every package (shared → gameserver → frontend → control-plane)
 ```
 
 ## Deploy to AWS

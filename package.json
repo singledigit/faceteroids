@@ -3,27 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "description": "Multiplayer Asteroids on AWS Lambda MicroVMs",
-  "workspaces": [
-    "shared",
-    "gameserver",
-    "frontend",
-    "src/control-plane"
-  ],
   "scripts": {
-    "build": "tsc --build",
-    "clean": "tsc --build --clean",
-    "dev:server": "npm run dev --workspace @game/game-server",
-    "dev:web": "npm run dev --workspace @game/web",
-    "test": "npm test --workspace @game/game-server",
-    "typecheck": "tsc --build",
+    "install:all": "for d in shared gameserver frontend src/control-plane; do (cd \"$d\" && npm install); done",
+    "clean": "for d in shared gameserver frontend src/control-plane; do (cd \"$d\" && npm run clean --if-present); done",
+    "dev:server": "npm run dev --prefix gameserver",
+    "dev:web": "npm run dev --prefix frontend",
+    "test": "npm test --prefix gameserver",
+    "typecheck": "for d in shared gameserver frontend src/control-plane; do (cd \"$d\" && npm run build); done",
     "deploy": "sam build && sam deploy",
     "build:front": "bash scripts/deploy-front.sh",
     "build:back": "bash scripts/deploy-back.sh"
   },
   "engines": {
     "node": ">=20"
-  },
-  "devDependencies": {
-    "typescript": "^5.5.4"
   }
 }
