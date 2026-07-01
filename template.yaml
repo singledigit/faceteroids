@@ -121,12 +121,14 @@ Resources:
         Format: cjs
         Target: node22
         Minify: true
-        EntryPoints: [index.ts]
+        EntryPoints: [src/index.ts]
         # The Lambda runtime ships AWS SDK v3 but NOT the lambda-microvms client,
         # so bundle everything (don't mark @aws-sdk/* external).
         External: []
     Properties:
-      CodeUri: packages/control-plane/src/
+      # CodeUri is the function package root (its package.json is the manifest,
+      # per the SAM esbuild TypeScript docs); the handler entry is src/index.ts.
+      CodeUri: src/control-plane/
       Handler: index.handler
       Policies:
         # rule 3: SAM policy template first…

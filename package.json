@@ -4,11 +4,10 @@
   "private": true,
   "description": "Multiplayer Asteroids on AWS Lambda MicroVMs",
   "workspaces": [
-    "packages/shared",
-    "packages/game-server",
-    "packages/web",
-    "packages/control-plane",
-    "packages/cli"
+    "shared",
+    "gameserver",
+    "frontend",
+    "src/control-plane"
   ],
   "scripts": {
     "build": "tsc --build",

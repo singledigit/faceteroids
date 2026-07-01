@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import type { RefreshTokenResponse } from '@game/shared';
+import type { RefreshTokenResponse } from '../lib/contract.js';
 import { badRequest, forbidden, guestSession, notFound, ok, pathParam, unauthorized } from '../lib/http.js';
 import { getRoom } from '../lib/ddb.js';
 import { mintWsToken } from '../lib/microvm.js';

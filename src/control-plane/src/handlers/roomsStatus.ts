@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import type { RoomStatusResponse } from '@game/shared';
+import type { RoomStatusResponse } from '../lib/contract.js';
 import { badRequest, notFound, ok, pathParam } from '../lib/http.js';
 import { getRoom } from '../lib/ddb.js';
 

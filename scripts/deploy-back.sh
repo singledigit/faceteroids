@@ -26,7 +26,7 @@ BASE_IMAGE="arn:aws:lambda:${REGION}:aws:microvm-image:al2023-1"
 echo "build:back  bundling game server…"
 npm run bundle --workspace @game/game-server
 
-GS=packages/game-server
+GS=gameserver
 STAMP="$(git rev-parse --short HEAD 2>/dev/null || date +%s)"
 ZIP="asteroids-${STAMP}.zip"
 

@@ -10,7 +10,7 @@ import {
   PutCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { GameMode, RoomStatus } from '@game/shared';
+import type { GameMode, RoomStatus } from './contract.js';
 import { REGION, TABLE_NAME } from './config.js';
 
 const doc = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {

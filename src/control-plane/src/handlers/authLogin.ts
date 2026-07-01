@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import type { LoginRequest, LoginResponse } from '@game/shared';
+import type { LoginRequest, LoginResponse } from '../lib/contract.js';
 import { badRequest, ok, parseBody, unauthorized } from '../lib/http.js';
 import { loginHost } from '../lib/cognito.js';
 

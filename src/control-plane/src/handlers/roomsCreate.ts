@@ -5,7 +5,7 @@ import {
   isGameMode,
   type CreateRoomRequest,
   type CreateRoomResponse,
-} from '@game/shared';
+} from '../lib/contract.js';
 import { badRequest, forbidden, hostIdentity, ok, parseBody } from '../lib/http.js';
 import { putRoom } from '../lib/ddb.js';
 import { mintWsToken, runRoomVm } from '../lib/microvm.js';

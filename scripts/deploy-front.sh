@@ -20,12 +20,12 @@ WEB_URL=$(output WebUrl)
 echo "build:front  api=$API_URL  bucket=$WEB_BUCKET"
 
 # 1. Build the static client.
-npx vite build packages/web
+npx vite build frontend
 
 # 2. Runtime config so the env-agnostic bundle finds the API (no rebuild on change).
-printf '{"apiUrl":"%s"}\n' "$API_URL" > packages/web/dist/config.json
+printf '{"apiUrl":"%s"}\n' "$API_URL" > frontend/dist/config.json
 
 # 3. Push to S3 (CloudFront serves it; caching is disabled, so this is live at once).
-aws s3 cp packages/web/dist "s3://$WEB_BUCKET" --recursive --region "$REGION"
+aws s3 cp frontend/dist "s3://$WEB_BUCKET" --recursive --region "$REGION"
 
 echo "Deployed front end → $WEB_URL"

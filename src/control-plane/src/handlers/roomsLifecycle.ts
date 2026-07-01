@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyResultV2 } from 'aws-lambda';
-import type { RefreshTokenResponse } from '@game/shared';
+import type { RefreshTokenResponse } from '../lib/contract.js';
 import {
   badRequest,
   forbidden,

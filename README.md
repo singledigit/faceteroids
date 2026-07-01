@@ -42,26 +42,31 @@ flowchart LR
 
 Two planes that never mix:
 
-- **Control plane** (`packages/control-plane`, `template.yaml`) — Lambda + API
+- **Control plane** (`src/control-plane`, `template.yaml`) — Lambda + API
   Gateway (HTTP API) + DynamoDB + Cognito, deployed with **AWS SAM**. Handles
   host login (Cognito), room lifecycle (`RunMicrovm` / `Suspend` / `Resume` /
   `TerminateMicrovm`), and minting short-lived MicroVM auth tokens. Also hosts
   the static web client on S3 + CloudFront.
-- **Data plane** (`packages/game-server`) — runs *inside* each MicroVM. The
+- **Data plane** (`gameserver`) — runs *inside* each MicroVM. The
   browser connects a WebSocket **directly** to the room's MicroVM endpoint. Auth
   and target port travel as `lambda-microvms.*` WebSocket subprotocols (browsers
   can't set WS headers); the proxy strips them before they reach the server.
 
 ```
-template.yaml     AWS SAM stack (DynamoDB, Cognito, HTTP API + Lambda, IAM roles,
-                  S3 artifact + web buckets, CloudFront)
-packages/
-  shared/         wire protocol, entities, mode rulesets, API DTOs
-  game-server/    authoritative sim (30Hz) + ws server (:8080) + lifecycle hooks (:9000)
-  web/            vanilla TS + canvas client (input sampling, snapshot interpolation)
-  control-plane/  Lambda router: login, rooms, tokens
-  cli/            admin: create-user / run-room / prune-images
+template.yaml       AWS SAM stack (DynamoDB, Cognito, HTTP API + Lambda, IAM roles,
+                    S3 artifact + web buckets, CloudFront)
+src/
+  control-plane/    self-contained Lambda router: login, rooms, tokens (its own
+                    package.json manifest; SAM esbuild-bundles it on build)
+gameserver/         authoritative sim (30Hz) + ws server (:8080) + lifecycle hooks (:9000)
+frontend/           vanilla TS + canvas client (input sampling, snapshot interpolation)
+shared/             wire protocol, entities, mode rulesets — shared by gameserver + frontend
 ```
+
+> The control-plane Lambda is deliberately **self-contained**: it does not import
+> `shared`, keeping its own copy of the API contract (`src/control-plane/src/lib/contract.ts`)
+> so `sam build` can bundle it from a single manifest. Its DTOs must stay in sync
+> with the client's `frontend/src/net/api.ts`.
 
 ### Why MicroVMs
 
@@ -73,7 +78,7 @@ TLS-terminated WSS endpoint, suspended when idle and auto-terminated by policy.
 ### Game modes (host picks at room creation)
 
 One server build supports all three; behavior is parameterized by a `Ruleset`
-(`packages/shared/src/modes.ts`) delivered to the MicroVM via the `/run` hook:
+(`shared/src/modes.ts`) delivered to the MicroVM via the `/run` hook:
 
 - **coop** — friendly fire off, escalating asteroid waves, survive together.
 - **ffa** — friendly fire on, score = kills + rocks, respawns.
@@ -84,11 +89,11 @@ One server build supports all three; behavior is parameterized by a `Ruleset`
 The server runs a fixed-timestep loop at 30Hz (`sim/loop.ts`), integrating physics
 (thrust, inertia, toroidal screen-wrap), resolving collisions, and applying mode
 rules. Snapshots broadcast at 15Hz; clients render ~100ms in the past and
-interpolate (`web/src/render/interp.ts`). Clients send **inputs only** — never
+interpolate (`frontend/src/render/interp.ts`). Clients send **inputs only** — never
 positions — so the server is the single source of truth.
 
 The simulation is pure and deterministic (injected RNG + clock), which keeps it
-unit-testable without any networking. See `packages/game-server/test`.
+unit-testable without any networking. See `gameserver/test`.
 
 ## Run locally (no AWS)
 
@@ -141,8 +146,14 @@ npm run build:back
 # 3. Build the web client, write config.json (the API URL) and upload to S3.
 npm run build:front
 
-# 4. Create a host login in Cognito (interactive password prompt — real terminal).
-npm run cli --workspace @game/cli -- create-user alice
+# 4. Create a host login directly in Cognito (self-registration is disabled, so
+#    hosts exist only via AdminCreateUser). Use the UserPoolId from the outputs.
+POOL=$(aws cloudformation describe-stacks --stack-name asteroids \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice \
+  --message-action SUPPRESS
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username alice \
+  --password 'ChangeMe-123!' --permanent
 ```
 
 > The image build (step 2) is spelled out as explicit `aws lambda-microvms …`
@@ -171,21 +182,18 @@ resume via `/tokens/{roomId}/refresh`. If the room has since closed, the client
 falls back to the lobby. (Only if a player doesn't return within the window does
 the disconnect count as a death / last-standing elimination.)
 
-### Admin CLI (`game-admin`)
+### Admin tasks (direct AWS CLI)
 
-| Command | Purpose |
+There is no bespoke admin CLI — host provisioning and image upkeep are plain AWS
+calls (`POOL` and `IMG` resolved from the stack outputs / image ARN):
+
+| Task | Command |
 |---|---|
-| `create-user <name> [password]` | Create a host user in Cognito (prompts for password if omitted) |
-| `list-users` | List host users (Cognito) |
-| `delete-user <name>` | Delete a host user (Cognito) |
-| `run-room [mode]` | Manually run a MicroVM + mint a token (data-plane test) |
-| `prune-images` | Delete old image versions (keep the latest ACTIVE) |
-
-> Image publishing is `npm run build:back` (see Deploy), not a `game-admin`
-> subcommand.
-
-> Omit the password and `create-user` prompts for it on an interactive TTY (no
-> echo); pass it as an argument for scripts / non-interactive shells.
+| Create a host | `aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice --message-action SUPPRESS` then `admin-set-user-password … --permanent` |
+| List hosts | `aws cognito-idp list-users --user-pool-id "$POOL"` |
+| Delete a host | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username alice` |
+| Publish image | `npm run build:back` (bundle → zip → `create/update-microvm-image`) |
+| Prune old image versions | `aws lambda-microvms list-microvm-image-versions --image-identifier "$IMG"` then `delete-microvm-image-version` on inactive ones |
 
 ## Cost & teardown
 
@@ -194,7 +202,10 @@ cap is 8 hours. The host's **End game** button terminates immediately. DynamoDB
 rows expire via TTL. To remove everything:
 
 ```bash
-npm run cli --workspace @game/cli -- prune-images   # delete inactive image versions
+# delete inactive image versions (storage cost), then tear down all SAM infra
+IMG="arn:aws:lambda:$AWS_REGION:$(aws sts get-caller-identity --query Account --output text):microvm-image:asteroids"
+aws lambda-microvms list-microvm-image-versions --image-identifier "$IMG"  # find inactive versions
+# aws lambda-microvms delete-microvm-image-version --image-identifier "$IMG" --image-version <v>
 sam delete --stack-name asteroids                    # tear down all SAM infra
 ```
 
@@ -204,7 +215,7 @@ sam delete --stack-name asteroids                    # tear down all SAM infra
 ## Security notes
 
 - **Host accounts live in Amazon Cognito** with self-registration **disabled** —
-  accounts exist only via `game-admin create-user` (AdminCreateUser). Login uses
+  accounts exist only via `admin-create-user` (AdminCreateUser). Login uses
   the admin auth flow and returns a Cognito ID token; **host routes are protected
   by an API Gateway Cognito JWT authorizer**, so the token is verified at the edge
   and never reaches application code unverified. No hand-rolled auth.

@@ -1,6 +1,6 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import type { JoinRoomRequest, JoinRoomResponse } from '@game/shared';
+import type { JoinRoomRequest, JoinRoomResponse } from '../lib/contract.js';
 import { badRequest, json, notFound, ok, parseBody, pathParam } from '../lib/http.js';
 import { adjustPlayerCount, createGuestSession, getRoom } from '../lib/ddb.js';
 import { mintWsToken } from '../lib/microvm.js';

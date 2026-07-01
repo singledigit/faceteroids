@@ -8,7 +8,7 @@ import {
   TerminateMicrovmCommand,
   LambdaMicrovms,
 } from '@aws-sdk/client-lambda-microvms';
-import type { GameMode } from '@game/shared';
+import type { GameMode } from './contract.js';
 import {
   EXECUTION_ROLE_ARN,
   GAME_PORT,
