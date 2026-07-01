@@ -128,7 +128,7 @@ Resources:
     Properties:
       # CodeUri is the function package root (its package.json is the manifest,
       # per the SAM esbuild TypeScript docs); the handler entry is src/index.ts.
-      CodeUri: src/control-plane/
+      CodeUri: control-plane/
       Handler: index.handler
       Policies:
         # rule 3: SAM policy template first…

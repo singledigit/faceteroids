@@ -42,7 +42,7 @@ flowchart LR
 
 Two planes that never mix:
 
-- **Control plane** (`src/control-plane`, `template.yaml`) — Lambda + API
+- **Control plane** (`control-plane`, `template.yaml`) — Lambda + API
   Gateway (HTTP API) + DynamoDB + Cognito, deployed with **AWS SAM**. Handles
   host login (Cognito), room lifecycle (`RunMicrovm` / `Suspend` / `Resume` /
   `TerminateMicrovm`), and minting short-lived MicroVM auth tokens. Also hosts
@@ -55,8 +55,7 @@ Two planes that never mix:
 ```
 template.yaml       AWS SAM stack (DynamoDB, Cognito, HTTP API + Lambda, IAM roles,
                     S3 artifact + web buckets, CloudFront)
-src/
-  control-plane/    self-contained Lambda router: login, rooms, tokens (its own
+control-plane/      self-contained Lambda router: login, rooms, tokens (its own
                     package.json manifest; SAM esbuild-bundles it on build)
 gameserver/         authoritative sim (30Hz) + ws server (:8080) + lifecycle hooks (:9000)
 frontend/           vanilla TS + canvas client (input sampling, snapshot interpolation)
@@ -64,7 +63,7 @@ shared/             wire protocol, entities, mode rulesets — shared by gameser
 ```
 
 > The control-plane Lambda is deliberately **self-contained**: it does not import
-> `shared`, keeping its own copy of the API contract (`src/control-plane/src/lib/contract.ts`)
+> `shared`, keeping its own copy of the API contract (`control-plane/src/lib/contract.ts`)
 > so `sam build` can bundle it from a single manifest. Its DTOs must stay in sync
 > with the client's `frontend/src/net/api.ts`.
 
@@ -102,7 +101,7 @@ build per directory, `shared` first since the others consume its compiled output
 
 ```bash
 # Install (each dir owns its node_modules), building shared first.
-for d in shared gameserver frontend src/control-plane; do ( cd "$d" && npm install ); done
+for d in shared gameserver frontend control-plane; do ( cd "$d" && npm install ); done
 ( cd shared && npm run build )
 
 # Terminal 1 — game server
@@ -120,7 +119,7 @@ Controls: **Arrows / WASD** to move, **Space** to fire.
 ```bash
 npm test --prefix gameserver          # unit tests for the authoritative sim
 ( cd shared && npm run build ) && \
-  for d in gameserver frontend src/control-plane; do ( cd "$d" && npm run build ); done  # typecheck all
+  for d in gameserver frontend control-plane; do ( cd "$d" && npm run build ); done  # typecheck all
 ```
 
 ## Deploy to AWS
