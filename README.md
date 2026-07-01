@@ -147,6 +147,15 @@ sam build && sam deploy          # outputs include ApiUrl and WebUrl
 
 ### 2. Publish the MicroVM image (direct service calls)
 
+> **Why this isn't a script.** In a real project you'd absolutely wrap these
+> steps in a script (bundle → zip → upload → create → poll → activate) and run it
+> as one command — that's the recommended approach for day-to-day use. We keep
+> them inline here on purpose: publishing a MicroVM image is a sequence of
+> explicit **Lambda MicroVMs service calls** (`create-microvm-image`,
+> `get-microvm-image-version`, `update-microvm-image-version`), and the point of
+> this sample is to *show* those calls and what each one does rather than hide
+> them behind an opaque wrapper. Read them once, then script them.
+
 Bundle the game server, zip it with the `Dockerfile` **at the archive root** (the
 service requires that), upload to S3, then call the service. AWS compiles the
 Dockerfile server-side — no local Docker.
