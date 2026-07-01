@@ -4,9 +4,6 @@ dist/
 .env
 .env.*
 !.env.example
-cdk.out/
 *.zip
 .DS_Store
-packages/web/dist/
-packages/*/dist/
 .aws-sam/

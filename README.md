@@ -97,17 +97,19 @@ unit-testable without any networking. See `gameserver/test`.
 
 ## Run locally (no AWS)
 
-# Each package is independent (no workspace hoisting) — install per directory,
-# building `shared` first since the others consume its compiled output.
+Each package is independent (no workspaces, no root `package.json`) — install and
+build per directory, `shared` first since the others consume its compiled output.
+
 ```bash
-npm run install:all   # loops shared, gameserver, frontend, src/control-plane
+# Install (each dir owns its node_modules), building shared first.
+for d in shared gameserver frontend src/control-plane; do ( cd "$d" && npm install ); done
 ( cd shared && npm run build )
 
 # Terminal 1 — game server
-GAME_MODE=coop npm run dev:server     # ws://localhost:8080/play
+GAME_MODE=coop npm run dev --prefix gameserver   # ws://localhost:8080/play
 
 # Terminal 2 — web client (local flow)
-npm run dev:web                        # then open the ?server= URL below
+npm run dev --prefix frontend                    # then open the ?server= URL below
 ```
 
 Open `http://localhost:5173/?server=ws://localhost:8080/play` in two browser
@@ -116,14 +118,15 @@ tabs, enter names, and fly. `GAME_MODE` can be `coop`, `ffa`, or `lastStanding`.
 Controls: **Arrows / WASD** to move, **Space** to fire.
 
 ```bash
-npm test          # unit tests for the authoritative sim (gameserver)
-npm run typecheck # build every package (shared → gameserver → frontend → control-plane)
+npm test --prefix gameserver          # unit tests for the authoritative sim
+( cd shared && npm run build ) && \
+  for d in gameserver frontend src/control-plane; do ( cd "$d" && npm run build ); done  # typecheck all
 ```
 
 ## Deploy to AWS
 
 Deployed with **AWS SAM**. Three ordered steps: `sam deploy` provisions the infra
-+ control-plane Lambda; `build:back` publishes the MicroVM image; `build:front`
++ control-plane Lambda; `deploy-back.sh` publishes the MicroVM image; `deploy-front.sh`
 builds and uploads the web client (it reads the API URL from the stack, so it
 must run after `sam deploy`).
 
@@ -137,16 +140,16 @@ export AWS_REGION=us-west-2
 # 1. Build + deploy the stack: DynamoDB, Cognito, HTTP API + control-plane Lambda,
 #    MicroVM build/exec IAM roles, S3 buckets, and the CloudFront distribution.
 #    (`sam build` esbuild-bundles the Lambda; first deploy may prompt via --guided.)
-npm run deploy            # = sam build && sam deploy
+sam build && sam deploy
 #    Outputs include ApiUrl and WebUrl (the playable URL).
 
 # 2. Publish the MicroVM image: bundle the game server, zip it with the Dockerfile,
 #    upload to S3, then `aws lambda-microvms create-microvm-image` (AWS compiles the
 #    Dockerfile server-side — no local Docker), poll to SUCCESSFUL, mark ACTIVE.
-npm run build:back
+bash scripts/deploy-back.sh
 
 # 3. Build the web client, write config.json (the API URL) and upload to S3.
-npm run build:front
+bash scripts/deploy-front.sh
 
 # 4. Create a host login directly in Cognito (self-registration is disabled, so
 #    hosts exist only via AdminCreateUser). Use the UserPoolId from the outputs.
@@ -194,7 +197,7 @@ calls (`POOL` and `IMG` resolved from the stack outputs / image ARN):
 | Create a host | `aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice --message-action SUPPRESS` then `admin-set-user-password … --permanent` |
 | List hosts | `aws cognito-idp list-users --user-pool-id "$POOL"` |
 | Delete a host | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username alice` |
-| Publish image | `npm run build:back` (bundle → zip → `create/update-microvm-image`) |
+| Publish image | `bash scripts/deploy-back.sh` (bundle → zip → `create/update-microvm-image`) |
 | Prune old image versions | `aws lambda-microvms list-microvm-image-versions --image-identifier "$IMG"` then `delete-microvm-image-version` on inactive ones |
 
 ## Cost & teardown

@@ -1,9 +1,0 @@
-{
-  "files": [],
-  "references": [
-    { "path": "shared" },
-    { "path": "gameserver" },
-    { "path": "frontend" },
-    { "path": "src/control-plane" }
-  ]
-}
