@@ -7,3 +7,7 @@ dist/
 *.zip
 .DS_Store
 .aws-sam/
+
+# local writing drafts (blog / video), not part of the sample
+outline.md
+script.md
