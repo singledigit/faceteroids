@@ -146,6 +146,9 @@ export class GameServer {
         this.byPlayer.set(conn.playerId, conn);
 
         this.world.addPlayer(conn.playerId, msg.name.slice(0, 24) || 'Player');
+        console.log(
+          `[game] player joined id=${conn.playerId} host=${conn.isHost} players=${this.world.playerCount()}`,
+        );
         this.send(ws, {
           t: 'welcome',
           v: PROTOCOL_VERSION,
@@ -169,6 +172,7 @@ export class GameServer {
       // Only a connection that proved host authority may start the round.
       if (msg.t === 'start' && conn.isHost && this.world) {
         this.world.start();
+        console.log(`[game] round started by host=${conn.playerId}`);
       }
     });
 
@@ -179,6 +183,9 @@ export class GameServer {
       if (conn.playerId && this.byPlayer.get(conn.playerId) === conn) {
         this.byPlayer.delete(conn.playerId);
         this.world?.removePlayer(conn.playerId);
+        console.log(
+          `[game] player left id=${conn.playerId} players=${this.world?.playerCount() ?? 0}`,
+        );
       }
     });
     ws.on('error', () => ws.close());

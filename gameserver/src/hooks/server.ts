@@ -82,13 +82,16 @@ function handle(req: IncomingMessage, res: ServerResponse, game: GameServer): vo
           // Rebase time-relative state across the suspend wall-clock jump and
           // re-seed so randomness diverges from the pre-suspend memory state.
           game.resumed();
+          console.log('[hooks] /resume — reseeded RNG, back to RUNNING');
           return ok(res);
 
         case '/suspend':
           // Gameplay state is ephemeral; nothing to drain. Answer immediately.
+          console.log('[hooks] /suspend — freezing (state preserved in snapshot)');
           return ok(res);
 
         case '/terminate':
+          console.log('[hooks] /terminate — shutting down');
           return ok(res);
 
         default:
