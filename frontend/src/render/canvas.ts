@@ -24,6 +24,15 @@ const SHIP_COLORS = [
   '#c084fc', // violet
 ];
 
+// Color for the player at scoreboard index i. The first slots use the curated
+// neon palette; beyond that we spread hues by the golden angle so each of up to
+// MAX_PLAYERS_PER_ROOM players still gets a visually distinct color.
+function shipColor(i: number): string {
+  if (i < SHIP_COLORS.length) return SHIP_COLORS[i]!;
+  const hue = ((i - SHIP_COLORS.length) * 137.508) % 360;
+  return `hsl(${hue.toFixed(1)}, 75%, 62%)`;
+}
+
 interface Star {
   x: number;
   y: number;
@@ -124,7 +133,7 @@ export class Renderer {
 
     // Player colors by scoreboard order.
     const colorFor = new Map<string, string>();
-    snap.scoreboard.forEach((e, i) => colorFor.set(e.playerId, SHIP_COLORS[i % SHIP_COLORS.length]!));
+    snap.scoreboard.forEach((e, i) => colorFor.set(e.playerId, shipColor(i)));
 
     for (const b of snap.bullets) {
       this.drawBullet(ctx, b, colorFor.get(b.ownerId) ?? '#ffffff');
@@ -379,21 +388,29 @@ export class Renderer {
     ctx.textAlign = 'left';
     ctx.fillText(chip, 28, 36);
 
-    // Scoreboard panel (top-right).
-    const rows = snap.scoreboard.slice(0, 8);
+    // Scoreboard panel (top-right). Rows are compact so a full room (up to
+    // MAX_PLAYERS_PER_ROOM) fits within the world height; any overflow beyond
+    // what fits is summarized as a "+N more" line.
+    const rowH = 18;
+    const topMargin = 16;
+    const headerPad = 20;
+    const maxRows = Math.max(1, Math.floor((WORLD_HEIGHT - topMargin * 2 - headerPad - rowH) / rowH));
+    const hasOverflow = snap.scoreboard.length > maxRows;
+    const shown = hasOverflow ? maxRows - 1 : Math.min(snap.scoreboard.length, maxRows);
+    const rows = snap.scoreboard.slice(0, shown);
     const panelW = 210;
-    const panelH = 18 + rows.length * 22;
+    const panelH = headerPad + (rows.length + (hasOverflow ? 1 : 0)) * rowH;
     const px = WORLD_WIDTH - panelW - 16;
-    this.roundRect(px, 16, panelW, panelH, 10);
+    this.roundRect(px, topMargin, panelW, panelH, 10);
     ctx.fillStyle = 'rgba(12,16,28,0.7)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.stroke();
 
-    let y = 38;
-    ctx.font = '600 13px Inter, system-ui, sans-serif';
+    let y = topMargin + 22;
+    ctx.font = '600 12px Inter, system-ui, sans-serif';
     rows.forEach((e, i) => {
-      const color = SHIP_COLORS[i % SHIP_COLORS.length]!;
+      const color = shipColor(i);
       ctx.fillStyle = color;
       ctx.fillRect(px + 14, y - 9, 6, 10);
       ctx.fillStyle = e.alive ? '#e6e9f5' : '#6b7280';
@@ -403,8 +420,13 @@ export class Renderer {
       const lives = Number.isFinite(e.lives) ? ' ' + '●'.repeat(Math.max(0, e.lives)) : '';
       ctx.fillStyle = e.alive ? '#9aa0b4' : '#5b6070';
       ctx.fillText(`${e.score}${lives}`, px + panelW - 14, y);
-      y += 22;
+      y += rowH;
     });
+    if (hasOverflow) {
+      ctx.fillStyle = '#6b7280';
+      ctx.textAlign = 'left';
+      ctx.fillText(`+${snap.scoreboard.length - shown} more`, px + 28, y);
+    }
 
     if (snap.phase === 'roundOver') {
       ctx.fillStyle = 'rgba(5,6,13,0.72)';

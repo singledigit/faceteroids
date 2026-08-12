@@ -25,6 +25,12 @@ export async function roomsJoin(
   if (room.status === 'CLOSED' || room.status === 'TERMINATED') {
     return json(410, { error: 'room closed' });
   }
+  // A paused room must not accept joins: the new client's WS ingress would
+  // auto-resume the VM, un-pausing the game for everyone. 409 (not 410) so the
+  // client can wait and retry rather than treating the room as gone.
+  if (room.status === 'SUSPENDED') {
+    return json(409, { error: 'game is paused — try again when the host resumes' });
+  }
   // Soft capacity gate; the game server enforces the hard limit at WS hello.
   if (room.playerCount >= room.maxPlayers) return json(409, { error: 'room full' });
 

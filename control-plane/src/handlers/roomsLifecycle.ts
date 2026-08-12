@@ -10,7 +10,7 @@ import {
   pathParam,
 } from '../lib/http.js';
 import { getRoom, setRoomStatus, type RoomItem } from '../lib/ddb.js';
-import { mintWsToken, resumeVm, suspendVm } from '../lib/microvm.js';
+import { getVmState, mintWsToken, resumeVm, suspendVm } from '../lib/microvm.js';
 
 type HostRoom =
   | { ok: false; error: APIGatewayProxyResultV2 }
@@ -56,17 +56,27 @@ export async function roomsSuspend(
   // Mark SUSPENDED BEFORE suspending the VM. Otherwise there's a window where the
   // VM is suspending but the room still reads RUNNING — a guest whose socket just
   // dropped would then reconnect, and that ingress traffic auto-resumes the VM,
-  // un-pausing the game. We revert to RUNNING if the suspend call fails.
+  // un-pausing the game.
   await setRoomStatus(r.roomId, 'SUSPENDED');
   try {
     await suspendVm(r.room.microvmId);
   } catch (err) {
-    await setRoomStatus(r.roomId, 'RUNNING');
-    // The VM rejects suspend unless it's RUNNING (e.g. still booting). Surface a
-    // clear 409 so the client can tell the host to try again in a moment.
+    // The VM rejects suspend unless it's RUNNING. That conflict is ambiguous:
+    // "still booting" (revert to RUNNING, host retries) but ALSO "already
+    // suspending/suspended" (e.g. a double-clicked Pause). Reverting in the
+    // second case would mark a suspended VM RUNNING — guests would reconnect and
+    // their ingress auto-resumes the VM, visibly undoing the pause. Reconcile
+    // against the VM's actual state instead of assuming.
     if (err instanceof Error && err.name === 'ConflictException') {
+      const state = await getVmState(r.room.microvmId);
+      if (state === 'SUSPENDING' || state === 'SUSPENDED') {
+        // The pause is already happening (double-click) — report success.
+        return ok({ roomId: r.roomId, status: 'SUSPENDED' });
+      }
+      await setRoomStatus(r.roomId, 'RUNNING');
       return json(409, { error: 'room not ready to pause yet — try again shortly' });
     }
+    await setRoomStatus(r.roomId, 'RUNNING');
     throw err;
   }
   return ok({ roomId: r.roomId, status: 'SUSPENDED' });
@@ -84,7 +94,24 @@ export async function roomsResume(
   try {
     await resumeVm(r.room.microvmId);
   } catch {
-    // Already running (e.g. auto-resumed) — fall through to mark RUNNING.
+    // Resume can fail for reasons that mean OPPOSITE things for the room, so
+    // reconcile against the VM's actual state rather than assuming:
+    //  - already RUNNING (auto-resumed) — fine, mark the room RUNNING;
+    //  - TERMINATED — the idle policy auto-terminates a VM suspended longer than
+    //    suspendedDurationSeconds (30 min). Blindly marking RUNNING here would
+    //    send every client into an endless reconnect loop against a dead
+    //    endpoint. Record the death and tell the host the room is gone.
+    const state = await getVmState(r.room.microvmId);
+    if (state === 'TERMINATED' || state === 'TERMINATING') {
+      await setRoomStatus(r.roomId, 'TERMINATED');
+      return json(410, { error: 'room expired while paused (30 min limit) — start a new game' });
+    }
+    if (state === 'SUSPENDING') {
+      // Still mid-suspend (e.g. Resume clicked right after Pause). It can't be
+      // resumed until the snapshot completes; keep the room SUSPENDED.
+      return json(409, { error: 'room is still pausing — try again shortly' });
+    }
+    // RUNNING (or PENDING): fall through and mark the room RUNNING.
   }
   await setRoomStatus(r.roomId, 'RUNNING');
   return ok({ roomId: r.roomId, status: 'RUNNING' });

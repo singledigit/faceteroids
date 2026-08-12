@@ -2,11 +2,13 @@
 
 import {
   CreateMicrovmAuthTokenCommand,
+  GetMicrovmCommand,
   RunMicrovmCommand,
   SuspendMicrovmCommand,
   ResumeMicrovmCommand,
   TerminateMicrovmCommand,
   LambdaMicrovms,
+  type MicrovmState,
 } from '@aws-sdk/client-lambda-microvms';
 import type { GameMode } from './contract.js';
 import {
@@ -70,6 +72,18 @@ export async function mintWsToken(microvmId: string): Promise<TokenResult> {
     wsToken,
     wsTokenExpiresAt: Date.now() + WS_TOKEN_TTL_MINUTES * 60 * 1000,
   };
+}
+
+/**
+ * The VM's actual lifecycle state. Suspend/resume race their in-between states
+ * (SUSPENDING, auto-resume, idle-policy auto-terminate), so on any conflict or
+ * failure the room's DynamoDB status must be reconciled against THIS — never
+ * assumed from which call happened to fail.
+ */
+export async function getVmState(microvmId: string): Promise<MicrovmState> {
+  const res = await client.send(new GetMicrovmCommand({ microvmIdentifier: microvmId }));
+  if (!res.state) throw new Error('GetMicrovm returned no state');
+  return res.state;
 }
 
 export async function terminateVm(microvmId: string): Promise<void> {
