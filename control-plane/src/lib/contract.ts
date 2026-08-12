@@ -12,7 +12,7 @@ export function isGameMode(value: unknown): value is GameMode {
 }
 
 /** Max players per room (soft gate here; the game server enforces the hard cap). */
-export const MAX_PLAYERS_PER_ROOM = 8;
+export const MAX_PLAYERS_PER_ROOM = 30;
 
 export type RoomStatus = 'STARTING' | 'RUNNING' | 'SUSPENDED' | 'CLOSED' | 'TERMINATED';
 

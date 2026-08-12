@@ -66,6 +66,6 @@ export interface RefreshTokenResponse {
   wsTokenExpiresAt: number;
 }
 
-export const MAX_PLAYERS_PER_ROOM = 8;
+export const MAX_PLAYERS_PER_ROOM = 30;
 /** WS auth tokens last 60 min; refresh proactively before this margin. */
 export const TOKEN_REFRESH_MARGIN_MS = 10 * 60 * 1000;

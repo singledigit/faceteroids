@@ -29,7 +29,7 @@ flowchart LR
     end
 
     subgraph DP["Data plane — one MicroVM per room"]
-        VM["Firecracker MicroVM<br/>:8080 ws game server (30Hz sim)<br/>:9000 lifecycle hooks"]
+        VM["Firecracker MicroVM — 2GB/1vCPU baseline<br/>:8080 ws game server (30Hz sim)<br/>:9000 lifecycle hooks"]
     end
 
     H -- "1. load app" --> CF
@@ -96,6 +96,52 @@ positions — so the server is the single source of truth.
 
 The simulation is pure and deterministic (injected RNG + clock), which keeps it
 unit-testable without any networking. See `gameserver/test`.
+
+### Snapshot bandwidth
+
+Player count is limited by **egress bytes, not CPU**. A broadcast round costs well
+under 1 ms even at 30 players (~2% of the 33 ms tick budget), but snapshot traffic
+grows **quadratically**: each player adds entities to the snapshot *and* needs a
+copy of it. Measured against the real `World` at FFA settings:
+
+| Players | Snapshot | Per client | Total egress |
+|---|---|---|---|
+| 8 | 5.8 KB | 87 KB/s | 0.71 MB/s |
+| 10 | 6.1 KB | 92 KB/s | 0.94 MB/s |
+| 20 | 10.2 KB | 153 KB/s | 3.13 MB/s |
+| 30 | 16.3 KB | 245 KB/s | 7.53 MB/s |
+
+This matters because MicroVM **proxy throughput is ~1 MB/s per vCPU**. Exceed it
+and the in-guest proxy applies backpressure: latency rises, *nothing errors* — the
+game just feels jittery with no signal in the logs. At the 2 GB / 1 vCPU baseline
+(the default), ~10 players fit comfortably; past that you need a more compact wire
+format rather than a bigger VM.
+
+The current wire format is deliberately readable rather than tight — plain JSON,
+one `encode()` per client:
+
+```json
+{"id":"88c19fc0-964f-47e1-b37b-48dfd2519222","playerId":"p0","name":"Player0",
+ "pos":{"x":637.6955864214904,"y":379.74593778347304}, ...}
+```
+
+At 30 players, ships alone are 9.1 KB of a 16.3 KB snapshot, at ~304 bytes each —
+mostly a UUID and name that never change after join, plus sub-nanometre precision
+on a 1280×720 canvas. Measured savings from fixing that:
+
+| Change | Snapshot | Total @ 30p |
+|---|---|---|
+| Today | 16.3 KB | 7.53 MB/s |
+| Quantize floats (int pos, 1dp vel, 3dp angle) | 12.7 KB | 5.87 MB/s |
+| + tuple encoding, identity sent once | **2.1 KB** | **0.96 MB/s** |
+
+So a 30-player room fits in the **2 GB default** with a compact format — cheaper
+than 10 players costs today. Scaling the VM is the expensive way to solve this;
+it's listed here as the honest trade this sample currently makes. If you want 30
+players, do the protocol work (send identity once via a roster, quantize, tuple
+encode, decouple the scoreboard, and hoist `ackSeq` out of the snapshot so it
+encodes once per broadcast instead of once per client) rather than buying vCPUs to
+push redundant bytes.
 
 ## Run locally (no AWS)
 
@@ -199,8 +245,7 @@ server-side, so no local Docker is needed:
 
 ```bash
 npm run bundle --prefix gameserver                    # -> gameserver/dist/bundle.mjs
-zip -j image.zip gameserver/Dockerfile                # Dockerfile at archive root
-( cd gameserver && zip ../image.zip dist/bundle.mjs )
+zip -j image.zip gameserver/Dockerfile gameserver/dist/bundle.mjs
 aws s3 cp image.zip "s3://$BUCKET/microvm-images/asteroids.zip"
 ```
 
@@ -251,10 +296,10 @@ Self-registration is disabled, so hosts exist only via `admin-create-user`.
 ```bash
 POOL=$(aws cloudformation describe-stacks --stack-name asteroids \
   --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
-aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice \
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --username <username> \
   --message-action SUPPRESS
-aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username alice \
-  --password 'ChangeMe-123!' --permanent
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username <username> \
+  --password '<password>' --permanent
 ```
 
 Open the **WebUrl** output in a browser:
@@ -286,9 +331,9 @@ calls (`POOL` and `IMG` resolved from the stack outputs / image ARN):
 
 | Task | Command |
 |---|---|
-| Create a host | `aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice --message-action SUPPRESS` then `admin-set-user-password … --permanent` |
+| Create a host | `aws cognito-idp admin-create-user --user-pool-id "$POOL" --username <username> --message-action SUPPRESS` then `admin-set-user-password … --permanent` |
 | List hosts | `aws cognito-idp list-users --user-pool-id "$POOL"` |
-| Delete a host | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username alice` |
+| Delete a host | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username <username>` |
 | Publish / update image | the `aws lambda-microvms create/update-microvm-image` sequence in [Deploy step 2](#2-publish-the-microvm-image-direct-service-calls) |
 | Prune old image versions | `aws lambda-microvms list-microvm-image-versions --image-identifier "$IMG"` then `delete-microvm-image-version` on inactive ones |
 
@@ -297,6 +342,10 @@ calls (`POOL` and `IMG` resolved from the stack outputs / image ARN):
 Rooms auto-suspend after 15 min idle and auto-terminate 30 min later; the hard
 cap is 8 hours. The host's **End game** button terminates immediately. DynamoDB
 rows expire via TTL.
+
+Each room's VM bills at its **2 GB / 1 vCPU baseline** (the default) while
+running, plus per-second usage above it if the VM autoscales. Suspended VMs stop
+billing for compute.
 
 To remove **everything**, tear the pieces down in this order. The image and its
 versions are Lambda MicroVMs *service* resources — `sam delete` does **not** touch

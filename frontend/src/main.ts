@@ -48,6 +48,12 @@ interface PlayConfig {
   session?: Session;
   /** Called after the host ends the game (returns host to the lobby). */
   onEnded?: () => void;
+  /**
+   * Mount in the paused state WITHOUT connecting (room status is SUSPENDED).
+   * Connecting would send ingress traffic that auto-resumes the VM — a refresh
+   * during a pause must wait exactly like a live client that saw the disconnect.
+   */
+  startPaused?: boolean;
 }
 
 function startGame(cfg: PlayConfig): void {
@@ -184,9 +190,12 @@ function startGame(cfg: PlayConfig): void {
 
   function showPausedOverlay(): void {
     waitMsg.style.display = 'block';
+    // The 30-minute limit is platform behavior (idle policy: a suspended VM is
+    // auto-terminated after suspendedDurationSeconds) — surface it so a long
+    // pause ending the room isn't a surprise.
     waitMsg.textContent = cfg.isHost
-      ? 'Paused — the room is suspended. Press Resume to continue.'
-      : 'The host paused the game. Waiting to resume…';
+      ? 'Paused — the room is suspended. Press Resume within 30 minutes or the room shuts down.'
+      : 'The host paused the game. Waiting to resume… (rooms end after 30 min paused)';
     if (cfg.isHost) $('pause-game').textContent = '▶ Resume';
   }
 
@@ -236,8 +245,18 @@ function startGame(cfg: PlayConfig): void {
           waitMsg.style.display = 'none';
           pauseBtn.textContent = '⏸ Pause';
           connect();
-        } catch {
-          setStatus('Could not resume the room.');
+        } catch (err) {
+          // A pause longer than 30 min auto-terminates the VM (idle policy); the
+          // control plane reports that as a hard 410. Distinguish it from a
+          // transient failure — the room is gone, so end rather than retry.
+          const s = await api.getRoomStatus(cfg.roomId).catch(() => null);
+          if (s && (s.status === 'CLOSED' || s.status === 'TERMINATED')) {
+            ended = true;
+            clearSession();
+            setStatus((err as Error).message || 'The room has ended.');
+          } else {
+            setStatus('Could not resume the room.');
+          }
         } finally {
           pauseBtn.disabled = false;
         }
@@ -273,7 +292,18 @@ function startGame(cfg: PlayConfig): void {
 
   // Keep the token fresh for reconnects.
   cfg.refresher?.schedule(Date.now() + 50 * 60 * 1000);
-  connect();
+  if (cfg.startPaused) {
+    // Refreshed into a paused room: hold exactly like a live client that saw the
+    // disconnect (overlay + guest polling). Do NOT connect — that would
+    // auto-resume the VM. The pause/Resume button is normally revealed by
+    // updateHud on the first snapshot; none arrives while paused, so show it here.
+    paused = true;
+    showPausedOverlay();
+    if (cfg.isHost) pauseBtn.style.display = 'inline-block';
+    else pollUntilRunning();
+  } else {
+    connect();
+  }
 
   const frame = () => {
     const snap = buffer.sample(performance.now());
@@ -428,7 +458,7 @@ function showCreateScreen(token: string, username?: string): void {
       const room = await api.createRoom(token, mode);
       await waitForRoom(room.roomId);
       $('status').style.display = 'none';
-      showShareLink(room.joinUrl);
+      showShareLink(room.joinUrl, room.roomId, token);
       const refresher = new TokenRefresher(() => api.refreshHostToken(room.roomId, token));
       startGame({
         endpoint: room.endpoint,
@@ -482,23 +512,26 @@ async function waitForRoom(roomId: string): Promise<void> {
   }
 }
 
-function showShareLink(joinUrl: string): void {
+function showShareLink(joinUrl: string, roomId: string, hostToken: string): void {
   const el = $('share');
   el.style.display = 'flex';
   el.innerHTML = `
     <span>🔗 Invite players:</span>
     <input id="share-url" readonly value="${joinUrl}">
     <button id="copy-link">Copy</button>`;
+
   const input = $('share-url') as HTMLInputElement;
   input.addEventListener('focus', () => input.select());
-  ($('copy-link') as HTMLButtonElement).addEventListener('click', async () => {
+
+  const copy = $('copy-link') as HTMLButtonElement;
+  copy.addEventListener('click', async () => {
     input.select();
     try {
       await navigator.clipboard.writeText(joinUrl);
-      ($('copy-link') as HTMLButtonElement).textContent = 'Copied!';
+      copy.textContent = 'Copied!';
     } catch {
       document.execCommand('copy'); // fallback for non-secure contexts
-      ($('copy-link') as HTMLButtonElement).textContent = 'Copied!';
+      copy.textContent = 'Copied!';
     }
     setTimeout(() => {
       const b = document.getElementById('copy-link');
@@ -529,6 +562,11 @@ async function resumeFlow(s: Session, fallback: () => void): Promise<void> {
     if (status.status === 'CLOSED' || status.status === 'TERMINATED') {
       throw new Error('room closed');
     }
+    // Refreshing into a PAUSED room must not connect — the reconnect's ingress
+    // would auto-resume the VM, silently un-pausing the game for everyone while
+    // the room still reads SUSPENDED. Mount the paused UI and wait instead.
+    // (Token minting below is safe: it's a control-plane call, not VM ingress.)
+    const startPaused = status.status === 'SUSPENDED';
     const refreshFn =
       s.kind === 'host'
         ? () => api.refreshHostToken(s.roomId, s.hostToken)
@@ -538,16 +576,17 @@ async function resumeFlow(s: Session, fallback: () => void): Promise<void> {
 
     const refresher = new TokenRefresher(refreshFn);
     if (s.kind === 'host') {
-      showShareLink(`${location.origin}/?room=${s.roomId}`);
+      showShareLink(`${location.origin}/?room=${s.roomId}`, s.roomId, s.hostToken);
       startGame({
         endpoint: s.endpoint, wsToken, name: s.name, playerId: 'host', refresher,
         isHost: true, roomId: s.roomId, hostToken: s.hostToken, hostSecret: s.hostSecret,
-        session: s, onEnded: () => showCreateScreen(s.hostToken),
+        session: s, onEnded: () => showCreateScreen(s.hostToken), startPaused,
       });
     } else {
       startGame({
         endpoint: s.endpoint, wsToken, name: s.name, playerId: s.guestId, refresher, session: s,
         roomId: s.roomId, // so a paused room is detected on disconnect (see guestFlow)
+        startPaused,
       });
     }
   } catch {

@@ -9,13 +9,13 @@
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1076.0",
-    "@aws-sdk/client-lambda-microvms": "^3.1076.0",
     "@aws-sdk/client-dynamodb": "^3.1076.0",
+    "@aws-sdk/client-lambda-microvms": "^3.1076.0",
     "@aws-sdk/lib-dynamodb": "^3.1076.0"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
     "@types/aws-lambda": "^8.10.140",
+    "@types/node": "^20.14.0",
     "esbuild": "^0.23.0"
   }
 }

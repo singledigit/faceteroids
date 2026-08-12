@@ -41,7 +41,8 @@ async function req<T>(path: string, init?: RequestInit & { token?: string }): Pr
   const res = await fetch(`${api}${path}`, { ...init, headers });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `${res.status} ${res.statusText}`);
+    const msg = body.error ?? `${res.status} ${res.statusText}`;
+    throw new Error(msg);
   }
   return res.json() as Promise<T>;
 }

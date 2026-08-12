@@ -7,7 +7,7 @@ FROM public.ecr.aws/docker/library/node:20-bookworm-slim
 WORKDIR /app
 
 # The esbuild bundle is self-contained (ws + @game/shared inlined).
-COPY dist/bundle.mjs ./bundle.mjs
+COPY bundle.mjs ./bundle.mjs
 
 ENV NODE_ENV=production \
     GAME_PORT=8080 \
